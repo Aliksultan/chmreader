@@ -39,3 +39,7 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# CHM binary (pre-decompiled cache in public/cache/ deploys instead)
+*.chm
+server_log.txt
