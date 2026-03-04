@@ -1,5 +1,79 @@
 import { NextResponse } from 'next/server';
 
+const CHUNK_SIZE = 4000; // characters per chunk (safe for token limits)
+const MAX_OUTPUT_TOKENS = 16384;
+
+async function translateChunk(text, langName, apiKey) {
+    const response = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent?key=${apiKey}`,
+        {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                contents: [{
+                    parts: [{
+                        text: `Translate the following text to ${langName}. Preserve the original formatting and paragraph structure. Only output the translation, nothing else.\n\n${text}`
+                    }]
+                }],
+                generationConfig: {
+                    temperature: 0.3,
+                    maxOutputTokens: MAX_OUTPUT_TOKENS
+                }
+            })
+        }
+    );
+
+    if (!response.ok) {
+        const errData = await response.text();
+        throw new Error(`Gemini API error: ${response.status} - ${errData}`);
+    }
+
+    const data = await response.json();
+    return data.candidates?.[0]?.content?.parts?.[0]?.text || '';
+}
+
+function splitIntoChunks(text, maxChunkSize) {
+    const chunks = [];
+    const paragraphs = text.split(/\n\s*\n/); // Split by double newlines (paragraphs)
+    let currentChunk = '';
+
+    for (const para of paragraphs) {
+        if (currentChunk.length + para.length + 2 > maxChunkSize && currentChunk.length > 0) {
+            chunks.push(currentChunk.trim());
+            currentChunk = '';
+        }
+        currentChunk += (currentChunk ? '\n\n' : '') + para;
+    }
+
+    if (currentChunk.trim()) {
+        chunks.push(currentChunk.trim());
+    }
+
+    // If any chunk is still too large, split by sentences
+    const finalChunks = [];
+    for (const chunk of chunks) {
+        if (chunk.length <= maxChunkSize) {
+            finalChunks.push(chunk);
+        } else {
+            // Split by sentences
+            const sentences = chunk.split(/(?<=[.!?])\s+/);
+            let subChunk = '';
+            for (const sentence of sentences) {
+                if (subChunk.length + sentence.length + 1 > maxChunkSize && subChunk.length > 0) {
+                    finalChunks.push(subChunk.trim());
+                    subChunk = '';
+                }
+                subChunk += (subChunk ? ' ' : '') + sentence;
+            }
+            if (subChunk.trim()) {
+                finalChunks.push(subChunk.trim());
+            }
+        }
+    }
+
+    return finalChunks;
+}
+
 export async function POST(request) {
     try {
         const { text, targetLang, apiKey } = await request.json();
@@ -15,39 +89,23 @@ export async function POST(request) {
 
         const langName = langNames[targetLang] || targetLang;
 
-        // Truncate text to avoid exceeding token limits
-        const maxChars = 50000;
-        const truncatedText = text.length > maxChars ? text.substring(0, maxChars) + '\n\n[Content truncated...]' : text;
-
-        const response = await fetch(
-            `https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent?key=${apiKey}`,
-            {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    contents: [{
-                        parts: [{
-                            text: `Translate the following text to ${langName}. Preserve the original formatting and paragraph structure. Only output the translation, nothing else.\n\n${truncatedText}`
-                        }]
-                    }],
-                    generationConfig: {
-                        temperature: 0.3,
-                        maxOutputTokens: 8192
-                    }
-                })
-            }
-        );
-
-        if (!response.ok) {
-            const errData = await response.text();
-            console.error('Gemini API error:', errData);
-            return NextResponse.json({ error: `Gemini API error: ${response.status}` }, { status: 500 });
+        // For short texts, translate in one shot
+        if (text.length <= CHUNK_SIZE) {
+            const translation = await translateChunk(text, langName, apiKey);
+            return NextResponse.json({ translation });
         }
 
-        const data = await response.json();
-        const translatedText = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
+        // For large texts, split into chunks and translate each
+        const chunks = splitIntoChunks(text, CHUNK_SIZE);
+        const translatedChunks = [];
 
-        return NextResponse.json({ translation: translatedText });
+        for (const chunk of chunks) {
+            const translated = await translateChunk(chunk, langName, apiKey);
+            translatedChunks.push(translated);
+        }
+
+        const fullTranslation = translatedChunks.join('\n\n');
+        return NextResponse.json({ translation: fullTranslation });
     } catch (err) {
         console.error('Translation error:', err);
         return NextResponse.json({ error: err.message }, { status: 500 });

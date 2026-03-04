@@ -104,6 +104,13 @@ export default function Reader({ params, searchParams }) {
   const [showApiKeyInput, setShowApiKeyInput] = useState(false);
   const [pendingLang, setPendingLang] = useState(null);
 
+  // AI Features States
+  const [aiResult, setAiResult] = useState('');
+  const [isAiLoading, setIsAiLoading] = useState(false);
+  const [showAiPanel, setShowAiPanel] = useState(false);
+  const [aiMode, setAiMode] = useState(''); // 'summarize' | 'explain'
+  const [pendingAiMode, setPendingAiMode] = useState(null);
+
   // Load saved API key
   useEffect(() => {
     const savedKey = localStorage.getItem('gemini_api_key');
@@ -248,8 +255,58 @@ export default function Reader({ params, searchParams }) {
     const randomIndex = Math.floor(Math.random() * flattenedToc.length);
     const newPage = `${cacheUrl || `/cache/${book.replace('.chm', '')}`}/${flattenedToc[randomIndex]}`;
     setCurrentPage(newPage);
-    // Ensure sidebar is open so user sees the expanded path
     setSidebarOpen(true);
+  };
+
+  const handleAi = async (mode) => {
+    if (!geminiApiKey) {
+      setPendingAiMode(mode);
+      setShowApiKeyInput(true);
+      return;
+    }
+    if (!iframeRef.current || !iframeRef.current.contentWindow) return;
+
+    const doc = iframeRef.current.contentWindow.document;
+    if (!doc.body) return;
+
+    // Use original text if we have it, otherwise use current
+    const bodyText = originalHtmlRef.current
+      ? (() => { const temp = document.createElement('div'); temp.innerHTML = originalHtmlRef.current; return temp.innerText; })()
+      : doc.body.innerText || '';
+
+    if (!bodyText.trim()) return;
+
+    setIsAiLoading(true);
+    setShowAiPanel(true);
+    setAiMode(mode);
+    setAiResult('');
+
+    // Determine response language based on active translation
+    const lang = activeLang === 'tr' ? 'ru' : activeLang;
+
+    try {
+      const res = await fetch('/api/ai', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          text: bodyText,
+          mode: mode,
+          lang: lang,
+          apiKey: geminiApiKey
+        })
+      });
+
+      const data = await res.json();
+      if (data.error) {
+        setAiResult(`Error: ${data.error}`);
+      } else {
+        setAiResult(data.result);
+      }
+    } catch (err) {
+      setAiResult(`Error: ${err.message}`);
+    } finally {
+      setIsAiLoading(false);
+    }
   };
 
   const formatHierarchy = (res) => {
@@ -668,6 +725,25 @@ export default function Reader({ params, searchParams }) {
               </button>
             </div>
 
+            <div className="ai-controls">
+              <button
+                className="icon-button ai-btn"
+                onClick={() => handleAi('summarize')}
+                disabled={isAiLoading}
+                title="Summarize Page"
+              >
+                {isAiLoading && aiMode === 'summarize' ? '⏳' : '📝'}
+              </button>
+              <button
+                className="icon-button ai-btn"
+                onClick={() => handleAi('explain')}
+                disabled={isAiLoading}
+                title="Explain Passages"
+              >
+                {isAiLoading && aiMode === 'explain' ? '⏳' : '💡'}
+              </button>
+            </div>
+
             <div className="zoom-controls">
               <button className="icon-button" onClick={() => setZoomLevel(z => Math.max(50, z - 10))} title="Zoom Out">
                 A-
@@ -735,6 +811,26 @@ export default function Reader({ params, searchParams }) {
                 </div>
               </div>
             )}
+
+            {/* AI Results Panel */}
+            {showAiPanel && (
+              <div className="ai-panel">
+                <div className="ai-panel-header">
+                  <h3>{aiMode === 'summarize' ? '📝 Summary' : '💡 Explanation'}</h3>
+                  <button className="icon-button" onClick={() => setShowAiPanel(false)}>✕</button>
+                </div>
+                <div className="ai-panel-body">
+                  {isAiLoading ? (
+                    <div className="translation-loading" style={{ boxShadow: 'none', border: 'none', background: 'transparent' }}>
+                      <div className="loader"></div>
+                      <p>{aiMode === 'summarize' ? 'Summarizing...' : 'Analyzing passages...'}</p>
+                    </div>
+                  ) : (
+                    <div className="ai-result-text">{aiResult}</div>
+                  )}
+                </div>
+              </div>
+            )}
           </div>
         )}
       </main>
@@ -764,6 +860,10 @@ export default function Reader({ params, searchParams }) {
                   if (pendingLang) {
                     handleTranslate(pendingLang);
                     setPendingLang(null);
+                  }
+                  if (pendingAiMode) {
+                    handleAi(pendingAiMode);
+                    setPendingAiMode(null);
                   }
                 }}
                 disabled={!geminiApiKey.trim()}
@@ -1554,6 +1654,78 @@ export default function Reader({ params, searchParams }) {
           flex-direction: column;
           align-items: center;
           justify-content: center;
+        }
+
+        .ai-controls {
+          display: flex;
+          align-items: center;
+          gap: 2px;
+          background: var(--card-bg);
+          border: 1px solid var(--card-border);
+          border-radius: var(--radius-sm);
+          padding: 2px;
+        }
+
+        .ai-btn {
+          font-size: 1rem;
+          transition: all 0.2s;
+        }
+
+        .ai-btn:hover:not(:disabled) {
+          transform: scale(1.1);
+        }
+
+        .ai-panel {
+          position: absolute;
+          top: 0;
+          right: 0;
+          width: 420px;
+          max-width: 50%;
+          height: 100%;
+          background: var(--sidebar-bg);
+          backdrop-filter: blur(24px) saturate(180%);
+          -webkit-backdrop-filter: blur(24px) saturate(180%);
+          border-left: 1px solid var(--card-border);
+          box-shadow: var(--shadow-xl);
+          z-index: 15;
+          display: flex;
+          flex-direction: column;
+          animation: slideInRight 0.3s ease;
+        }
+
+        @keyframes slideInRight {
+          from { transform: translateX(100%); opacity: 0; }
+          to { transform: translateX(0); opacity: 1; }
+        }
+
+        .ai-panel-header {
+          padding: 0.875rem 1.25rem;
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          border-bottom: 1px solid var(--card-border);
+          flex-shrink: 0;
+        }
+
+        .ai-panel-header h3 {
+          font-size: 1rem;
+          font-weight: 700;
+          margin: 0;
+          color: var(--text-primary);
+        }
+
+        .ai-panel-body {
+          flex-grow: 1;
+          overflow-y: auto;
+          padding: 1.25rem;
+        }
+
+        .ai-result-text {
+          font-size: 0.9rem;
+          line-height: 1.75;
+          color: var(--text-primary);
+          white-space: pre-wrap;
+          word-wrap: break-word;
         }
       `}</style>
     </div>
