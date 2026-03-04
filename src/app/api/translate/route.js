@@ -3,25 +3,40 @@ import { NextResponse } from 'next/server';
 const CHUNK_SIZE = 4000; // characters per chunk (safe for token limits)
 const MAX_OUTPUT_TOKENS = 16384;
 
-async function translateChunk(text, langName, apiKey) {
-    const response = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent?key=${apiKey}`,
+const PRIMARY_MODEL = 'gemini-3-flash-preview';
+const FALLBACK_MODEL = 'gemini-3.1-flash-lite-preview';
+
+async function callGeminiModel(model, body, apiKey) {
+    return fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`,
         {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                contents: [{
-                    parts: [{
-                        text: `Translate the following text to ${langName}. Preserve the original formatting and paragraph structure. Only output the translation, nothing else.\n\n${text}`
-                    }]
-                }],
-                generationConfig: {
-                    temperature: 0.3,
-                    maxOutputTokens: MAX_OUTPUT_TOKENS
-                }
-            })
+            body: JSON.stringify(body)
         }
     );
+}
+
+async function translateChunk(text, langName, apiKey) {
+    const body = {
+        contents: [{
+            parts: [{
+                text: `Translate the following text to ${langName}. Preserve the original formatting and paragraph structure. Only output the translation, nothing else.\n\n${text}`
+            }]
+        }],
+        generationConfig: {
+            temperature: 0.3,
+            maxOutputTokens: MAX_OUTPUT_TOKENS
+        }
+    };
+
+    let response = await callGeminiModel(PRIMARY_MODEL, body, apiKey);
+
+    // Fallback to lite model on 503 (high demand)
+    if (response.status === 503) {
+        console.log(`${PRIMARY_MODEL} unavailable, falling back to ${FALLBACK_MODEL}`);
+        response = await callGeminiModel(FALLBACK_MODEL, body, apiKey);
+    }
 
     if (!response.ok) {
         const errData = await response.text();

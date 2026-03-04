@@ -2,24 +2,33 @@ import { NextResponse } from 'next/server';
 
 const CHUNK_SIZE = 6000;
 const MAX_OUTPUT_TOKENS = 16384;
+const PRIMARY_MODEL = 'gemini-3-flash-preview';
+const FALLBACK_MODEL = 'gemini-3.1-flash-lite-preview';
 
 async function callGemini(prompt, apiKey) {
-    const response = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent?key=${apiKey}`,
-        {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                contents: [{
-                    parts: [{ text: prompt }]
-                }],
-                generationConfig: {
-                    temperature: 0.4,
-                    maxOutputTokens: MAX_OUTPUT_TOKENS
-                }
-            })
+    const body = {
+        contents: [{
+            parts: [{ text: prompt }]
+        }],
+        generationConfig: {
+            temperature: 0.4,
+            maxOutputTokens: MAX_OUTPUT_TOKENS
         }
+    };
+
+    let response = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/${PRIMARY_MODEL}:generateContent?key=${apiKey}`,
+        { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }
     );
+
+    // Fallback to lite model on 503 (high demand)
+    if (response.status === 503) {
+        console.log(`${PRIMARY_MODEL} unavailable, falling back to ${FALLBACK_MODEL}`);
+        response = await fetch(
+            `https://generativelanguage.googleapis.com/v1beta/models/${FALLBACK_MODEL}:generateContent?key=${apiKey}`,
+            { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }
+        );
+    }
 
     if (!response.ok) {
         const errData = await response.text();
