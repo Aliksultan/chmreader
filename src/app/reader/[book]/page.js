@@ -190,13 +190,28 @@ export default function Reader({ params, searchParams }) {
       return;
     }
 
-    // If we already have a cached translation for this language, use it
+    // Build a cache key from the page path
+    const pageKey = (currentPage || '').replace(/^.*\/cache\//, '').replace(/[^a-zA-Z0-9]/g, '_');
+    const cacheKey = `tr_${pageKey}_${targetLang}`;
+
+    // Check in-memory cache first, then localStorage
     if (translationCacheRef.current[targetLang]) {
       doc.body.innerHTML = translationCacheRef.current[targetLang];
       setActiveLang(targetLang);
       applyIframeTheme();
       return;
     }
+
+    try {
+      const stored = localStorage.getItem(cacheKey);
+      if (stored) {
+        translationCacheRef.current[targetLang] = stored;
+        doc.body.innerHTML = stored;
+        setActiveLang(targetLang);
+        applyIframeTheme();
+        return;
+      }
+    } catch (e) { /* localStorage unavailable */ }
 
     // Otherwise, translate via API
     try {
@@ -229,8 +244,9 @@ export default function Reader({ params, searchParams }) {
           .split('\n')
           .map(line => line.trim() ? `<p style="margin: 0.5em 0; line-height: 1.8;">${line}</p>` : '')
           .join('');
-        // Cache the translated HTML
+        // Cache in memory and localStorage
         translationCacheRef.current[targetLang] = translatedHtml;
+        try { localStorage.setItem(cacheKey, translatedHtml); } catch (e) { /* quota exceeded */ }
         doc.body.innerHTML = translatedHtml;
         applyIframeTheme();
       }
