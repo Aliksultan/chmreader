@@ -281,6 +281,8 @@ export default function Reader({ params, searchParams }) {
     originalHtmlRef.current = null;
     translationCacheRef.current = {};
     setActiveLang('tr');
+    setCompareHtml('');
+    setCompareMode(false);
   }, [currentPage]);
 
   const handleRandomSection = () => {
@@ -1687,8 +1689,11 @@ export default function Reader({ params, searchParams }) {
 
         .iframe-wrapper {
           flex-grow: 1;
+          display: flex;
+          flex-direction: row;
           position: relative;
           background: var(--background);
+          overflow: hidden;
         }
         
         .content-iframe {
@@ -1864,15 +1869,11 @@ export default function Reader({ params, searchParams }) {
         }
 
         /* Comparative Mode */
-        .iframe-wrapper.compare-active {
-          display: flex;
-          flex-direction: row;
-        }
-
         .iframe-pane {
           flex: 1;
           position: relative;
           min-height: 0;
+          min-width: 0;
         }
 
         .compare-left {
@@ -1885,6 +1886,7 @@ export default function Reader({ params, searchParams }) {
           flex-direction: column;
           overflow: hidden;
           position: relative;
+          min-width: 0;
         }
 
         .compare-label {
@@ -1907,6 +1909,7 @@ export default function Reader({ params, searchParams }) {
           line-height: 1.8;
           color: var(--text-primary);
           background: #ffffff;
+          min-height: 0;
         }
 
         .compare-content.compare-dark {
