@@ -9,6 +9,7 @@
     "lint": "eslint"
   },
   "dependencies": {
+    "@upstash/redis": "^1.36.3",
     "iconv-lite": "^0.7.2",
     "jschardet": "^3.1.4",
     "next": "16.1.6",

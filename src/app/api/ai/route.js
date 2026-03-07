@@ -21,7 +21,6 @@ async function callGemini(prompt, apiKey) {
         { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }
     );
 
-    // Fallback to lite model on 503 (high demand)
     if (response.status === 503) {
         console.log(`${PRIMARY_MODEL} unavailable, falling back to ${FALLBACK_MODEL}`);
         response = await fetch(
@@ -36,7 +35,10 @@ async function callGemini(prompt, apiKey) {
     }
 
     const data = await response.json();
-    return data.candidates?.[0]?.content?.parts?.[0]?.text || '';
+    let result = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
+    // Clean up markdown code fences if present
+    result = result.replace(/^```html?\s*\n?/i, '').replace(/\n?```\s*$/i, '').trim();
+    return result;
 }
 
 function splitIntoChunks(text, maxSize) {
@@ -53,7 +55,6 @@ function splitIntoChunks(text, maxSize) {
     }
     if (current.trim()) chunks.push(current.trim());
 
-    // Handle single paragraphs that are too large
     const final = [];
     for (const chunk of chunks) {
         if (chunk.length <= maxSize) {
@@ -85,11 +86,25 @@ export async function POST(request) {
         const responseLang = lang === 'kk' ? 'Kazakh' : lang === 'tr' ? 'Turkish' : 'Russian';
 
         if (mode === 'summarize') {
-            const prompt = `You are a knowledgeable assistant helping a Muslim reader understand Islamic texts. The reader is studying from an Islamic book.
+            const prompt = `You are a knowledgeable assistant helping a Muslim reader understand Islamic texts.
 
-Summarize the following text concisely but comprehensively. Highlight the key Islamic rulings (hukm), evidence (dalil), and practical takeaways. If the text references Quran ayahs or hadiths, mention them specifically. Structure the summary with clear bullet points.
+Summarize the following text concisely but comprehensively in ${responseLang}.
 
-Respond in ${responseLang}.
+FORMAT YOUR RESPONSE AS HTML:
+- Use <h3> for the main summary title
+- Use <h4> for sub-section headings (e.g., "Key Rulings", "Evidence", "Practical Takeaways")
+- Use <ul><li> for bullet points
+- Use <strong> to highlight important terms, rulings, and Arabic/Islamic terms
+- Use <p> for explanatory paragraphs
+- Use <blockquote> for Quran ayahs or hadith references
+- Do NOT wrap in html/body tags or add CSS
+- Do NOT add code fences
+
+CONTENT GUIDELINES:
+- Highlight the key Islamic rulings (hukm) and evidence (dalil)
+- If the text references Quran ayahs or hadiths, mention them specifically
+- Include practical takeaways for a Muslim's daily life
+- Be thorough yet concise
 
 TEXT:
 ${text}`;
@@ -98,23 +113,31 @@ ${text}`;
             return NextResponse.json({ result });
 
         } else if (mode === 'explain') {
-            // For large texts, chunk and explain each part
             const chunks = splitIntoChunks(text, CHUNK_SIZE);
             const explanations = [];
 
             for (const chunk of chunks) {
-                const prompt = `You are a knowledgeable Islamic studies teacher helping a Muslim student understand a passage from an Islamic textbook. 
+                const prompt = `You are a knowledgeable Islamic studies teacher helping a Muslim student understand a passage.
 
-Explain the following passage in simple, clear language. For each key concept or ruling:
-- Explain what it means in practical terms
-- If there are Arabic/Islamic terms, define them
-- If Quran ayahs or hadiths are referenced, provide brief context
-- Note if there are different scholarly opinions (ikhtilaf) when relevant
-- Highlight the practical application for a Muslim's daily life
+Explain the following passage in clear, accessible ${responseLang}.
 
-Keep the explanation well-structured with paragraph breaks. Be thorough but accessible.
+FORMAT YOUR RESPONSE AS HTML:
+- Use <h3> for passage topic headings
+- Use <h4> for sub-topics
+- Use <p> for explanations
+- Use <strong> for Arabic/Islamic terms when first introduced
+- Use <blockquote> for Quran ayahs or hadith quotes
+- Use <ul><li> for listing rulings, conditions, or scholarly opinions
+- Use <em> for transliterations
+- Do NOT wrap in html/body tags or add CSS
+- Do NOT add code fences
 
-Respond in ${responseLang}.
+CONTENT GUIDELINES:
+- Explain what each concept or ruling means in practical terms
+- Define Arabic/Islamic terms clearly
+- Provide context for any Quran or hadith references
+- Note different scholarly opinions (ikhtilaf) when relevant
+- Highlight how it applies to a Muslim's daily life
 
 PASSAGE:
 ${chunk}`;
@@ -123,7 +146,7 @@ ${chunk}`;
                 explanations.push(result);
             }
 
-            return NextResponse.json({ result: explanations.join('\n\n---\n\n') });
+            return NextResponse.json({ result: explanations.join('<hr style="margin: 2rem 0; border: none; border-top: 1px solid var(--card-border);">') });
         }
 
         return NextResponse.json({ error: 'Invalid mode' }, { status: 400 });

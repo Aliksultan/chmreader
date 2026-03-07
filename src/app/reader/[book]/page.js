@@ -111,6 +111,10 @@ export default function Reader({ params, searchParams }) {
   const [aiMode, setAiMode] = useState(''); // 'summarize' | 'explain'
   const [pendingAiMode, setPendingAiMode] = useState(null);
 
+  // Comparative Mode
+  const [compareMode, setCompareMode] = useState(false);
+  const [compareHtml, setCompareHtml] = useState('');
+
   // Load saved API key
   useEffect(() => {
     const savedKey = localStorage.getItem('gemini_api_key');
@@ -196,7 +200,12 @@ export default function Reader({ params, searchParams }) {
 
     // Check in-memory cache first, then localStorage
     if (translationCacheRef.current[targetLang]) {
-      doc.body.innerHTML = translationCacheRef.current[targetLang];
+      if (compareMode) {
+        setCompareHtml(translationCacheRef.current[targetLang]);
+        doc.body.innerHTML = originalHtmlRef.current;
+      } else {
+        doc.body.innerHTML = translationCacheRef.current[targetLang];
+      }
       setActiveLang(targetLang);
       applyIframeTheme();
       return;
@@ -206,7 +215,12 @@ export default function Reader({ params, searchParams }) {
       const stored = localStorage.getItem(cacheKey);
       if (stored) {
         translationCacheRef.current[targetLang] = stored;
-        doc.body.innerHTML = stored;
+        if (compareMode) {
+          setCompareHtml(stored);
+          doc.body.innerHTML = originalHtmlRef.current;
+        } else {
+          doc.body.innerHTML = stored;
+        }
         setActiveLang(targetLang);
         applyIframeTheme();
         return;
@@ -230,7 +244,8 @@ export default function Reader({ params, searchParams }) {
         body: JSON.stringify({
           text: bodyText,
           targetLang: targetLang,
-          apiKey: geminiApiKey
+          apiKey: geminiApiKey,
+          pageKey: pageKey
         })
       });
 
@@ -240,14 +255,16 @@ export default function Reader({ params, searchParams }) {
         doc.body.innerHTML = originalHtmlRef.current;
         setActiveLang('tr');
       } else {
-        const translatedHtml = data.translation
-          .split('\n')
-          .map(line => line.trim() ? `<p style="margin: 0.5em 0; line-height: 1.8;">${line}</p>` : '')
-          .join('');
+        const translatedHtml = data.translation;
         // Cache in memory and localStorage
         translationCacheRef.current[targetLang] = translatedHtml;
         try { localStorage.setItem(cacheKey, translatedHtml); } catch (e) { /* quota exceeded */ }
-        doc.body.innerHTML = translatedHtml;
+        if (compareMode) {
+          setCompareHtml(translatedHtml);
+          doc.body.innerHTML = originalHtmlRef.current;
+        } else {
+          doc.body.innerHTML = translatedHtml;
+        }
         applyIframeTheme();
       }
     } catch (err) {
@@ -741,6 +758,31 @@ export default function Reader({ params, searchParams }) {
               </button>
             </div>
 
+            <button
+              className={`icon-button ${compareMode ? 'primary' : ''}`}
+              onClick={() => {
+                const next = !compareMode;
+                setCompareMode(next);
+                if (next && activeLang !== 'tr' && translationCacheRef.current[activeLang]) {
+                  setCompareHtml(translationCacheRef.current[activeLang]);
+                  if (originalHtmlRef.current && iframeRef.current?.contentWindow?.document?.body) {
+                    iframeRef.current.contentWindow.document.body.innerHTML = originalHtmlRef.current;
+                    applyIframeTheme();
+                  }
+                } else if (!next && activeLang !== 'tr' && translationCacheRef.current[activeLang]) {
+                  if (iframeRef.current?.contentWindow?.document?.body) {
+                    iframeRef.current.contentWindow.document.body.innerHTML = translationCacheRef.current[activeLang];
+                    applyIframeTheme();
+                  }
+                  setCompareHtml('');
+                }
+              }}
+              disabled={activeLang === 'tr'}
+              title="Compare Side-by-Side"
+            >
+              ⚖️
+            </button>
+
             <div className="ai-controls">
               <button
                 className="icon-button ai-btn"
@@ -808,15 +850,25 @@ export default function Reader({ params, searchParams }) {
             <Link href="/" className="back-link">Return to Library</Link>
           </div>
         ) : (
-          <div className="iframe-wrapper">
-            <iframe
-              ref={iframeRef}
-              src={currentPage}
-              className={`content-iframe ${theme === 'dark' ? 'dark-iframe-bg' : ''}`}
-              title="Book Content"
-              onLoad={handleIframeLoad}
-              sandbox="allow-same-origin allow-scripts allow-popups allow-forms"
-            />
+          <div className={`iframe-wrapper ${compareMode && compareHtml ? 'compare-active' : ''}`}>
+            <div className={`iframe-pane ${compareMode && compareHtml ? 'compare-left' : ''}`}>
+              {compareMode && compareHtml && <div className="compare-label">🇹🇷 Original</div>}
+              <iframe
+                ref={iframeRef}
+                src={currentPage}
+                className={`content-iframe ${theme === 'dark' ? 'dark-iframe-bg' : ''}`}
+                title="Book Content"
+                onLoad={handleIframeLoad}
+                sandbox="allow-same-origin allow-scripts allow-popups allow-forms"
+              />
+            </div>
+
+            {compareMode && compareHtml && (
+              <div className="compare-right">
+                <div className="compare-label">{activeLang === 'ru' ? '🇷🇺 Russian' : '🇰🇿 Kazakh'}</div>
+                <div className={`compare-content ${theme === 'dark' ? 'compare-dark' : ''}`} dangerouslySetInnerHTML={{ __html: compareHtml }} />
+              </div>
+            )}
 
             {/* Translation Loading Overlay */}
             {isTranslating && (
@@ -827,29 +879,31 @@ export default function Reader({ params, searchParams }) {
                 </div>
               </div>
             )}
-
-            {/* AI Results Panel */}
-            {showAiPanel && (
-              <div className="ai-panel">
-                <div className="ai-panel-header">
-                  <h3>{aiMode === 'summarize' ? '📝 Summary' : '💡 Explanation'}</h3>
-                  <button className="icon-button" onClick={() => setShowAiPanel(false)}>✕</button>
-                </div>
-                <div className="ai-panel-body">
-                  {isAiLoading ? (
-                    <div className="translation-loading" style={{ boxShadow: 'none', border: 'none', background: 'transparent' }}>
-                      <div className="loader"></div>
-                      <p>{aiMode === 'summarize' ? 'Summarizing...' : 'Analyzing passages...'}</p>
-                    </div>
-                  ) : (
-                    <div className="ai-result-text">{aiResult}</div>
-                  )}
-                </div>
-              </div>
-            )}
           </div>
         )}
       </main>
+
+      {/* AI Results Modal */}
+      {showAiPanel && (
+        <div className="search-modal-overlay" onClick={(e) => { if (e.target === e.currentTarget) setShowAiPanel(false); }}>
+          <div className="ai-modal">
+            <div className="ai-modal-header">
+              <h2>{aiMode === 'summarize' ? '📝 Summary' : '💡 Explanation'}</h2>
+              <button className="icon-button" onClick={() => setShowAiPanel(false)}>✕</button>
+            </div>
+            <div className="ai-modal-body">
+              {isAiLoading ? (
+                <div className="ai-loading-state">
+                  <div className="loader"></div>
+                  <p>{aiMode === 'summarize' ? 'Summarizing the text...' : 'Analyzing passages...'}</p>
+                </div>
+              ) : (
+                <div className="ai-result-content" dangerouslySetInnerHTML={{ __html: aiResult }} />
+              )}
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* API Key Modal */}
       {showApiKeyInput && (
@@ -1691,57 +1745,311 @@ export default function Reader({ params, searchParams }) {
           transform: scale(1.1);
         }
 
-        .ai-panel {
-          position: absolute;
-          top: 0;
-          right: 0;
-          width: 420px;
-          max-width: 50%;
-          height: 100%;
-          background: var(--sidebar-bg);
-          backdrop-filter: blur(24px) saturate(180%);
-          -webkit-backdrop-filter: blur(24px) saturate(180%);
-          border-left: 1px solid var(--card-border);
-          box-shadow: var(--shadow-xl);
-          z-index: 15;
+        /* AI Centered Modal */
+        .ai-modal {
+          width: 100%;
+          max-width: 720px;
+          max-height: 85vh;
+          background: var(--background);
+          border-radius: var(--radius-lg);
           display: flex;
           flex-direction: column;
-          animation: slideInRight 0.3s ease;
+          box-shadow: var(--shadow-xl), 0 0 0 1px var(--card-border);
+          border: none;
+          overflow: hidden;
+          animation: slideUp 0.25s ease;
         }
 
-        @keyframes slideInRight {
-          from { transform: translateX(100%); opacity: 0; }
-          to { transform: translateX(0); opacity: 1; }
-        }
-
-        .ai-panel-header {
-          padding: 0.875rem 1.25rem;
+        .ai-modal-header {
+          padding: 1.25rem 1.5rem;
+          border-bottom: 1px solid var(--card-border);
           display: flex;
           align-items: center;
           justify-content: space-between;
-          border-bottom: 1px solid var(--card-border);
+          background: var(--card-bg);
           flex-shrink: 0;
         }
 
-        .ai-panel-header h3 {
-          font-size: 1rem;
-          font-weight: 700;
+        .ai-modal-header h2 {
+          font-size: 1.15rem;
           margin: 0;
           color: var(--text-primary);
+          font-weight: 700;
         }
 
-        .ai-panel-body {
+        .ai-modal-body {
           flex-grow: 1;
           overflow-y: auto;
-          padding: 1.25rem;
+          padding: 2rem;
         }
 
-        .ai-result-text {
-          font-size: 0.9rem;
-          line-height: 1.75;
+        .ai-loading-state {
+          display: flex;
+          flex-direction: column;
+          align-items: center;
+          justify-content: center;
+          padding: 4rem 2rem;
+          gap: 1.25rem;
+          color: var(--text-muted);
+        }
+
+        .ai-loading-state p {
+          font-size: 0.95rem;
+          font-weight: 500;
+        }
+
+        .ai-result-content {
+          font-size: 0.95rem;
+          line-height: 1.85;
           color: var(--text-primary);
-          white-space: pre-wrap;
           word-wrap: break-word;
+        }
+
+        .ai-result-content h3 {
+          font-size: 1.2rem;
+          font-weight: 700;
+          margin: 1.5rem 0 0.75rem 0;
+          color: var(--text-primary);
+          letter-spacing: -0.01em;
+        }
+
+        .ai-result-content h3:first-child {
+          margin-top: 0;
+        }
+
+        .ai-result-content h4 {
+          font-size: 1rem;
+          font-weight: 600;
+          margin: 1.25rem 0 0.5rem 0;
+          color: var(--primary);
+        }
+
+        .ai-result-content p {
+          margin: 0.6rem 0;
+        }
+
+        .ai-result-content ul, .ai-result-content ol {
+          margin: 0.75rem 0;
+          padding-left: 1.5rem;
+        }
+
+        .ai-result-content li {
+          margin: 0.4rem 0;
+          line-height: 1.7;
+        }
+
+        .ai-result-content strong {
+          color: var(--text-primary);
+          font-weight: 600;
+        }
+
+        .ai-result-content em {
+          font-style: italic;
+          color: var(--text-muted);
+        }
+
+        .ai-result-content blockquote {
+          margin: 1rem 0;
+          padding: 0.75rem 1.25rem;
+          border-left: 3px solid var(--primary);
+          background: var(--primary-glow);
+          border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+          font-style: italic;
+        }
+
+        .ai-result-content hr {
+          margin: 2rem 0;
+          border: none;
+          border-top: 1px solid var(--card-border);
+        }
+
+        /* Comparative Mode */
+        .iframe-wrapper.compare-active {
+          display: flex;
+          flex-direction: row;
+        }
+
+        .iframe-pane {
+          flex: 1;
+          position: relative;
+          min-height: 0;
+        }
+
+        .compare-left {
+          border-right: 1px solid var(--card-border);
+        }
+
+        .compare-right {
+          flex: 1;
+          display: flex;
+          flex-direction: column;
+          overflow: hidden;
+          position: relative;
+        }
+
+        .compare-label {
+          padding: 0.4rem 0.875rem;
+          font-size: 0.78rem;
+          font-weight: 600;
+          color: var(--text-muted);
+          background: var(--card-bg);
+          border-bottom: 1px solid var(--card-border);
+          text-transform: uppercase;
+          letter-spacing: 0.03em;
+          flex-shrink: 0;
+        }
+
+        .compare-content {
+          flex: 1;
+          overflow-y: auto;
+          padding: 1.5rem;
+          font-size: 0.95rem;
+          line-height: 1.8;
+          color: var(--text-primary);
+          background: #ffffff;
+        }
+
+        .compare-content.compare-dark {
+          background: #141825;
+          color: #e2e8f0;
+        }
+
+        .compare-content h3 {
+          font-size: 1.15rem;
+          font-weight: 700;
+          margin: 1.25rem 0 0.5rem 0;
+        }
+
+        .compare-content h4 {
+          font-size: 1rem;
+          font-weight: 600;
+          margin: 1rem 0 0.4rem 0;
+        }
+
+        .compare-content p {
+          margin: 0.5rem 0;
+        }
+
+        .compare-content ul, .compare-content ol {
+          margin: 0.5rem 0;
+          padding-left: 1.5rem;
+        }
+
+        .compare-content li {
+          margin: 0.3rem 0;
+        }
+
+        /* Mobile Responsive */
+        @media (max-width: 768px) {
+          .sidebar {
+            width: 100%;
+            position: absolute;
+            height: 100%;
+          }
+
+          .sidebar-header {
+            height: 52px;
+          }
+
+          .reader-toolbar {
+            height: auto;
+            min-height: 48px;
+            padding: 0.4rem 0.6rem;
+            flex-wrap: wrap;
+            gap: 0.35rem;
+          }
+
+          .toolbar-left, .toolbar-right {
+            gap: 0.3rem;
+          }
+
+          .toolbar-right {
+            flex-wrap: wrap;
+            justify-content: flex-end;
+          }
+
+          .local-search-form {
+            width: 160px;
+          }
+
+          .icon-button {
+            width: 36px;
+            height: 36px;
+            min-width: 36px;
+            font-size: 0.85rem;
+          }
+
+          .zoom-controls {
+            display: none;
+          }
+
+          .lang-btn {
+            padding: 4px 7px;
+            font-size: 0.75rem;
+          }
+
+          .search-modal, .ai-modal {
+            height: 95vh;
+            max-height: 95vh;
+            border-radius: var(--radius-md);
+          }
+
+          .ai-modal-body {
+            padding: 1.25rem;
+          }
+
+          .ai-result-content {
+            font-size: 0.92rem;
+          }
+
+          .search-modal-overlay {
+            padding: 0.5rem;
+          }
+
+          .book-search-results {
+            width: calc(100vw - 2rem);
+            left: -1rem;
+          }
+
+          /* Comparative stacks vertically on mobile */
+          .iframe-wrapper.compare-active {
+            flex-direction: column;
+          }
+
+          .compare-left {
+            border-right: none;
+            border-bottom: 1px solid var(--card-border);
+          }
+
+          .compare-left,
+          .compare-right {
+            flex: 1;
+            min-height: 0;
+          }
+        }
+
+        @media (max-width: 480px) {
+          .toolbar-left {
+            width: 100%;
+            justify-content: space-between;
+          }
+
+          .toolbar-right {
+            width: 100%;
+          }
+
+          .local-search-form {
+            width: 100%;
+            flex: 1;
+          }
+
+          .nav-controls {
+            display: none;
+          }
+
+          .theme-controls {
+            display: none;
+          }
         }
       `}</style>
     </div>

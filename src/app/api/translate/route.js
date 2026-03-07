@@ -1,10 +1,36 @@
 import { NextResponse } from 'next/server';
 
-const CHUNK_SIZE = 4000; // characters per chunk (safe for token limits)
+const CHUNK_SIZE = 4000;
 const MAX_OUTPUT_TOKENS = 16384;
-
 const PRIMARY_MODEL = 'gemini-3-flash-preview';
 const FALLBACK_MODEL = 'gemini-3.1-flash-lite-preview';
+
+// Optional Upstash Redis - gracefully skip if not configured
+let redis = null;
+try {
+    if (process.env.UPSTASH_REDIS_REST_URL && process.env.UPSTASH_REDIS_REST_TOKEN) {
+        const { Redis } = await import('@upstash/redis');
+        redis = new Redis({
+            url: process.env.UPSTASH_REDIS_REST_URL,
+            token: process.env.UPSTASH_REDIS_REST_TOKEN,
+        });
+    }
+} catch (e) {
+    // @upstash/redis not installed or not configured - skip
+}
+
+async function getFromKV(key) {
+    if (!redis) return null;
+    try { return await redis.get(key); } catch (e) { return null; }
+}
+
+async function saveToKV(key, value) {
+    if (!redis) return;
+    try {
+        // Cache for 30 days
+        await redis.set(key, value, { ex: 60 * 60 * 24 * 30 });
+    } catch (e) { /* ignore */ }
+}
 
 async function callGeminiModel(model, body, apiKey) {
     return fetch(
@@ -21,7 +47,19 @@ async function translateChunk(text, langName, apiKey) {
     const body = {
         contents: [{
             parts: [{
-                text: `Translate the following text to ${langName}. Preserve the original formatting and paragraph structure. Only output the translation, nothing else.\n\n${text}`
+                text: `You are a professional translator. Translate the following text to ${langName}.
+
+IMPORTANT FORMATTING RULES:
+- Return the translation as clean HTML
+- Preserve the original structure: paragraphs, headings, lists, emphasis
+- Use <h3> for section headings, <p> for paragraphs, <strong> for emphasis, <ul>/<li> for lists
+- Keep paragraph breaks as separate <p> tags
+- Do NOT add any wrapper elements, html/body tags, or CSS
+- Do NOT add any notes, commentary, or translator remarks
+- ONLY output the translated HTML, nothing else
+
+TEXT TO TRANSLATE:
+${text}`
             }]
         }],
         generationConfig: {
@@ -32,7 +70,6 @@ async function translateChunk(text, langName, apiKey) {
 
     let response = await callGeminiModel(PRIMARY_MODEL, body, apiKey);
 
-    // Fallback to lite model on 503 (high demand)
     if (response.status === 503) {
         console.log(`${PRIMARY_MODEL} unavailable, falling back to ${FALLBACK_MODEL}`);
         response = await callGeminiModel(FALLBACK_MODEL, body, apiKey);
@@ -44,12 +81,17 @@ async function translateChunk(text, langName, apiKey) {
     }
 
     const data = await response.json();
-    return data.candidates?.[0]?.content?.parts?.[0]?.text || '';
+    let result = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
+
+    // Clean up markdown code fences if Gemini wraps HTML in them
+    result = result.replace(/^```html?\s*\n?/i, '').replace(/\n?```\s*$/i, '').trim();
+
+    return result;
 }
 
 function splitIntoChunks(text, maxChunkSize) {
     const chunks = [];
-    const paragraphs = text.split(/\n\s*\n/); // Split by double newlines (paragraphs)
+    const paragraphs = text.split(/\n\s*\n/);
     let currentChunk = '';
 
     for (const para of paragraphs) {
@@ -64,13 +106,11 @@ function splitIntoChunks(text, maxChunkSize) {
         chunks.push(currentChunk.trim());
     }
 
-    // If any chunk is still too large, split by sentences
     const finalChunks = [];
     for (const chunk of chunks) {
         if (chunk.length <= maxChunkSize) {
             finalChunks.push(chunk);
         } else {
-            // Split by sentences
             const sentences = chunk.split(/(?<=[.!?])\s+/);
             let subChunk = '';
             for (const sentence of sentences) {
@@ -91,7 +131,7 @@ function splitIntoChunks(text, maxChunkSize) {
 
 export async function POST(request) {
     try {
-        const { text, targetLang, apiKey } = await request.json();
+        const { text, targetLang, apiKey, pageKey } = await request.json();
 
         if (!text || !targetLang || !apiKey) {
             return NextResponse.json({ error: 'Missing required fields: text, targetLang, apiKey' }, { status: 400 });
@@ -104,22 +144,36 @@ export async function POST(request) {
 
         const langName = langNames[targetLang] || targetLang;
 
-        // For short texts, translate in one shot
+        // Check Vercel KV cache if pageKey is provided
+        const kvKey = pageKey ? `tr:${pageKey}:${targetLang}` : null;
+        if (kvKey) {
+            const cached = await getFromKV(kvKey);
+            if (cached) {
+                return NextResponse.json({ translation: cached, source: 'kv-cache' });
+            }
+        }
+
+        let fullTranslation;
+
         if (text.length <= CHUNK_SIZE) {
-            const translation = await translateChunk(text, langName, apiKey);
-            return NextResponse.json({ translation });
+            fullTranslation = await translateChunk(text, langName, apiKey);
+        } else {
+            const chunks = splitIntoChunks(text, CHUNK_SIZE);
+            const translatedChunks = [];
+
+            for (const chunk of chunks) {
+                const translated = await translateChunk(chunk, langName, apiKey);
+                translatedChunks.push(translated);
+            }
+
+            fullTranslation = translatedChunks.join('\n');
         }
 
-        // For large texts, split into chunks and translate each
-        const chunks = splitIntoChunks(text, CHUNK_SIZE);
-        const translatedChunks = [];
-
-        for (const chunk of chunks) {
-            const translated = await translateChunk(chunk, langName, apiKey);
-            translatedChunks.push(translated);
+        // Save to KV cache
+        if (kvKey && fullTranslation) {
+            await saveToKV(kvKey, fullTranslation);
         }
 
-        const fullTranslation = translatedChunks.join('\n\n');
         return NextResponse.json({ translation: fullTranslation });
     } catch (err) {
         console.error('Translation error:', err);
