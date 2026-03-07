@@ -229,14 +229,14 @@ export default function Reader({ params, searchParams }) {
 
     // Otherwise, translate via API
     try {
-      // Restore original first to get clean text
-      doc.body.innerHTML = originalHtmlRef.current;
-
-      const bodyText = doc.body.innerText || '';
+      // Extract text from original (without replacing iframe content)
+      const tempDiv = document.createElement('div');
+      tempDiv.innerHTML = originalHtmlRef.current;
+      const bodyText = tempDiv.innerText || '';
       if (!bodyText.trim()) return;
 
       setIsTranslating(true);
-      setActiveLang(targetLang);
+      // Keep showing Turkish original while translating — DON'T set activeLang yet
 
       const res = await fetch('/api/translate', {
         method: 'POST',
@@ -252,16 +252,16 @@ export default function Reader({ params, searchParams }) {
       const data = await res.json();
       if (data.error) {
         alert(`Translation error: ${data.error}`);
-        doc.body.innerHTML = originalHtmlRef.current;
-        setActiveLang('tr');
       } else {
         const translatedHtml = data.translation;
         // Cache in memory and localStorage
         translationCacheRef.current[targetLang] = translatedHtml;
         try { localStorage.setItem(cacheKey, translatedHtml); } catch (e) { /* quota exceeded */ }
+
+        // NOW swap the content
+        setActiveLang(targetLang);
         if (compareMode) {
           setCompareHtml(translatedHtml);
-          doc.body.innerHTML = originalHtmlRef.current;
         } else {
           doc.body.innerHTML = translatedHtml;
         }
@@ -269,8 +269,6 @@ export default function Reader({ params, searchParams }) {
       }
     } catch (err) {
       alert(`Translation error: ${err.message}`);
-      doc.body.innerHTML = originalHtmlRef.current;
-      setActiveLang('tr');
     } finally {
       setIsTranslating(false);
     }
@@ -872,13 +870,11 @@ export default function Reader({ params, searchParams }) {
               </div>
             )}
 
-            {/* Translation Loading Overlay */}
+            {/* Translation Indicator (non-blocking) */}
             {isTranslating && (
-              <div className="translation-overlay">
-                <div className="translation-loading">
-                  <div className="loader"></div>
-                  <p>Translating to {activeLang === 'ru' ? 'Russian' : 'Kazakh'}...</p>
-                </div>
+              <div className="translation-indicator">
+                <div className="loader small"></div>
+                <span>Translating...</span>
               </div>
             )}
           </div>
@@ -1558,31 +1554,23 @@ export default function Reader({ params, searchParams }) {
           cursor: not-allowed;
         }
 
-        .translation-overlay {
+        .translation-indicator {
           position: absolute;
-          inset: 0;
-          background: rgba(0, 0, 0, 0.45);
-          backdrop-filter: blur(6px);
+          bottom: 1.25rem;
+          right: 1.25rem;
           display: flex;
           align-items: center;
-          justify-content: center;
+          gap: 0.6rem;
+          padding: 0.6rem 1.1rem;
+          background: var(--background);
+          border: 1px solid var(--card-border);
+          border-radius: 999px;
+          box-shadow: var(--shadow-lg);
           z-index: 10;
           animation: fadeIn 0.2s ease;
-        }
-
-        .translation-loading {
-          display: flex;
-          flex-direction: column;
-          align-items: center;
-          justify-content: center;
-          padding: 2.5rem 3.5rem;
-          gap: 1rem;
+          font-size: 0.85rem;
+          font-weight: 500;
           color: var(--text-muted);
-          background: var(--background);
-          border-radius: var(--radius-lg);
-          border: 1px solid var(--card-border);
-          box-shadow: var(--shadow-xl);
-          animation: slideUp 0.25s ease;
         }
 
         .translation-loading p {
