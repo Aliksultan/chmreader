@@ -27,7 +27,7 @@ function TocNode({ item, cacheUrl, setCurrentPage, currentPage, level = 0, expan
               onToggleExpand(nodePath);
             }}
           >
-            {expanded ? '▼' : '▶'}
+            {expanded ? 'v' : '>'}
           </button>
         ) : (
           <span className="toc-toggle-spacer" />
@@ -1272,7 +1272,7 @@ export default function Reader({ params, searchParams }) {
         </div>
       )}
 
-      <style jsx>{`
+      <style jsx global>{`
         .reader-layout {
           display: flex;
           height: 100vh;
@@ -1380,6 +1380,7 @@ export default function Reader({ params, searchParams }) {
           border-radius: var(--radius-sm);
           transition: all 0.15s ease;
           position: relative;
+          padding: 3px 0;
         }
 
         .toc-item-header:hover {
@@ -1431,8 +1432,10 @@ export default function Reader({ params, searchParams }) {
           align-items: flex-start;
           gap: 8px;
           text-align: left;
-          background: none;
-          border: none;
+          background: transparent !important;
+          border: none !important;
+          outline: none !important;
+          box-shadow: none !important;
           color: var(--text-primary);
           padding: 0.4rem 0.5rem;
           border-radius: var(--radius-sm);

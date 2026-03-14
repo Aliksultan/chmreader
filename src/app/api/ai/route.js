@@ -75,15 +75,48 @@ function splitIntoChunks(text, maxSize) {
     return final;
 }
 
+// Optional Upstash/Vercel Redis - gracefully skip
+let redis = null;
+try {
+    const url = process.env.UPSTASH_REDIS_REST_URL || process.env.KV_REST_API_URL;
+    const token = process.env.UPSTASH_REDIS_REST_TOKEN || process.env.KV_REST_API_TOKEN;
+    if (url && token) {
+        const { Redis } = await import('@upstash/redis');
+        redis = new Redis({ url, token });
+        console.log('✅ Redis AI Cache Initialized:', url.includes('upstash') ? 'Upstash' : 'Vercel KV');
+    }
+} catch (e) {
+    console.error('Redis init failed:', e.message);
+}
+
+async function getFromKV(key) {
+    if (!redis) return null;
+    try { return await redis.get(key); } catch (e) { return null; }
+}
+
+async function saveToKV(key, value) {
+    if (!redis) return;
+    try { await redis.set(key, value, { ex: 60 * 60 * 24 * 30 }); } catch (e) { }
+}
+
 export async function POST(request) {
     try {
-        const { text, mode, lang, apiKey } = await request.json();
+        const { text, mode, lang, apiKey, pageKey } = await request.json();
 
         if (!text || !mode || !apiKey) {
             return NextResponse.json({ error: 'Missing required fields' }, { status: 400 });
         }
 
         const responseLang = lang === 'kk' ? 'Kazakh' : lang === 'tr' ? 'Turkish' : 'Russian';
+
+        // Check KV Cache
+        const kvKey = pageKey ? `ai:${mode}:${pageKey}:${lang}` : null;
+        if (kvKey) {
+            const cached = await getFromKV(kvKey);
+            if (cached) {
+                return NextResponse.json({ result: cached, source: 'kv-cache' });
+            }
+        }
 
         if (mode === 'summarize') {
             const prompt = `You are a knowledgeable assistant helping a Muslim reader understand Islamic texts.
@@ -110,6 +143,7 @@ TEXT:
 ${text}`;
 
             const result = await callGemini(prompt, apiKey);
+            if (kvKey && result) await saveToKV(kvKey, result);
             return NextResponse.json({ result });
 
         } else if (mode === 'explain') {
@@ -146,7 +180,10 @@ ${chunk}`;
                 explanations.push(result);
             }
 
-            return NextResponse.json({ result: explanations.join('<hr style="margin: 2rem 0; border: none; border-top: 1px solid var(--card-border);">') });
+            const finalHtml = explanations.join('<hr style="margin: 2rem 0; border: none; border-top: 1px solid var(--card-border);">');
+            if (kvKey && finalHtml) await saveToKV(kvKey, finalHtml);
+
+            return NextResponse.json({ result: finalHtml });
         }
 
         return NextResponse.json({ error: 'Invalid mode' }, { status: 400 });
