@@ -81,6 +81,8 @@ export default function Reader({ params, searchParams }) {
   const [currentPage, setCurrentPage] = useState('');
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [expandedPaths, setExpandedPaths] = useState(new Set());
+  const [splitPercent, setSplitPercent] = useState(50);
+  const compareContentRef = useRef(null);
 
   // New Toolbar States
   const [theme, setTheme] = useState('system');
@@ -505,6 +507,45 @@ export default function Reader({ params, searchParams }) {
         console.warn('Cannot apply zoom to iframe (cross-origin or sandboxed)', e);
       }
     }
+    // Also apply zoom to compare pane
+    if (compareContentRef.current) {
+      compareContentRef.current.style.zoom = `${zoomLevel}%`;
+    }
+  };
+
+  const handleSplitDrag = (e) => {
+    e.preventDefault();
+    const wrapper = e.target.closest('.iframe-wrapper');
+    if (!wrapper) return;
+    const rect = wrapper.getBoundingClientRect();
+    const isVertical = rect.width < 768; // mobile stacks vertically
+
+    const onMove = (moveEvent) => {
+      const clientPos = moveEvent.touches ? moveEvent.touches[0] : moveEvent;
+      let pct;
+      if (isVertical) {
+        pct = ((clientPos.clientY - rect.top) / rect.height) * 100;
+      } else {
+        pct = ((clientPos.clientX - rect.left) / rect.width) * 100;
+      }
+      setSplitPercent(Math.max(20, Math.min(80, pct)));
+    };
+
+    const onUp = () => {
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+      document.removeEventListener('touchmove', onMove);
+      document.removeEventListener('touchend', onUp);
+      document.body.style.userSelect = '';
+      document.body.style.cursor = '';
+    };
+
+    document.body.style.userSelect = 'none';
+    document.body.style.cursor = isVertical ? 'row-resize' : 'col-resize';
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+    document.addEventListener('touchmove', onMove);
+    document.addEventListener('touchend', onUp);
   };
 
   const applyIframeTheme = () => {
@@ -851,7 +892,7 @@ export default function Reader({ params, searchParams }) {
           </div>
         ) : (
           <div className={`iframe-wrapper ${compareMode && compareHtml ? 'compare-active' : ''}`}>
-            <div className={`iframe-pane ${compareMode && compareHtml ? 'compare-left' : ''}`}>
+            <div className={`iframe-pane ${compareMode && compareHtml ? 'compare-left' : ''}`} style={compareMode && compareHtml ? { flex: `0 0 ${splitPercent}%` } : {}}>
               {compareMode && compareHtml && <div className="compare-label">🇹🇷 Original</div>}
               <iframe
                 ref={iframeRef}
@@ -864,10 +905,18 @@ export default function Reader({ params, searchParams }) {
             </div>
 
             {compareMode && compareHtml && (
-              <div className="compare-right">
-                <div className="compare-label">{activeLang === 'ru' ? '🇷🇺 Russian' : '🇰🇿 Kazakh'}</div>
-                <div className={`compare-content ${theme === 'dark' ? 'compare-dark' : ''}`} dangerouslySetInnerHTML={{ __html: compareHtml }} />
-              </div>
+              <>
+                <div
+                  className="split-divider"
+                  onMouseDown={handleSplitDrag}
+                  onTouchStart={handleSplitDrag}
+                  title="Drag to resize"
+                />
+                <div className="compare-right" style={{ flex: `0 0 ${100 - splitPercent}%` }}>
+                  <div className="compare-label">{activeLang === 'ru' ? '🇷🇺 Russian' : '🇰🇿 Kazakh'}</div>
+                  <div ref={compareContentRef} className={`compare-content ${theme === 'dark' ? 'compare-dark' : ''}`} dangerouslySetInnerHTML={{ __html: compareHtml }} />
+                </div>
+              </>
             )}
 
             {/* Translation Indicator (non-blocking) */}
@@ -1896,13 +1945,39 @@ export default function Reader({ params, searchParams }) {
           font-size: 0.95rem;
           line-height: 1.8;
           color: var(--text-primary);
-          background: #ffffff;
+          background: var(--background);
           min-height: 0;
         }
 
         .compare-content.compare-dark {
-          background: #141825;
+          background: #1e293b;
           color: #e2e8f0;
+        }
+
+        .split-divider {
+          flex-shrink: 0;
+          width: 6px;
+          background: var(--card-border);
+          cursor: col-resize;
+          transition: background 0.2s;
+          position: relative;
+          z-index: 5;
+        }
+
+        .split-divider:hover,
+        .split-divider:active {
+          background: var(--primary);
+        }
+
+        .split-divider::after {
+          content: '⋮';
+          position: absolute;
+          top: 50%;
+          left: 50%;
+          transform: translate(-50%, -50%);
+          font-size: 14px;
+          color: var(--text-muted);
+          pointer-events: none;
         }
 
         .compare-content h3 {
@@ -2014,8 +2089,32 @@ export default function Reader({ params, searchParams }) {
 
           .compare-left,
           .compare-right {
-            flex: 1;
+            flex: 1 !important;
             min-height: 0;
+          }
+
+          .split-divider {
+            width: 100%;
+            height: 6px;
+            cursor: row-resize;
+          }
+
+          .split-divider::after {
+            content: '⋯';
+          }
+
+          /* Full-width translation indicator for mobile */
+          .translation-indicator {
+            position: fixed;
+            top: auto;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            border-radius: 0;
+            padding: 1rem;
+            font-size: 1rem;
+            z-index: 999;
+            justify-content: center;
           }
         }
 
@@ -2035,10 +2134,20 @@ export default function Reader({ params, searchParams }) {
           }
 
           .nav-controls {
-            display: none;
+            display: flex;
           }
 
           .theme-controls {
+            display: flex;
+          }
+
+          .theme-btn {
+            width: 30px;
+            height: 30px;
+            font-size: 0.75rem;
+          }
+
+          .ai-controls {
             display: none;
           }
         }
