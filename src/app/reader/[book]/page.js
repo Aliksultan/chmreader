@@ -774,6 +774,32 @@ export default function Reader({ params, searchParams }) {
     if (iframeRef.current && iframeRef.current.contentWindow) {
       try {
         const doc = iframeRef.current.contentWindow.document;
+
+        // Base Readability Styles (applies to both light and dark)
+        let layoutStyle = doc.getElementById('reader-layout-override');
+        if (!layoutStyle) {
+          layoutStyle = doc.createElement('style');
+          layoutStyle.id = 'reader-layout-override';
+          doc.head.appendChild(layoutStyle);
+        }
+        layoutStyle.innerHTML = `
+          body {
+            max-width: 800px !important;
+            margin: 0 auto !important;
+            padding: 2rem !important;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif !important;
+            font-size: 1.1rem !important;
+            line-height: 1.7 !important;
+          }
+          img {
+            max-width: 100% !important;
+            height: auto !important;
+          }
+          @media (max-width: 768px) {
+            body { padding: 1rem !important; }
+          }
+        `;
+
         const isDark = theme === 'dark' || (theme === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches);
 
         if (isDark) {
