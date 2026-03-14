@@ -1,22 +1,23 @@
 import { NextResponse } from 'next/server';
 
-const CHUNK_SIZE = 4000;
+const CHUNK_SIZE = 12000;
 const MAX_OUTPUT_TOKENS = 16384;
 const PRIMARY_MODEL = 'gemini-3-flash-preview';
 const FALLBACK_MODEL = 'gemini-3.1-flash-lite-preview';
 
-// Optional Upstash Redis - gracefully skip if not configured
+// Optional Upstash/Vercel Redis - gracefully skip if not configured
 let redis = null;
 try {
-    if (process.env.UPSTASH_REDIS_REST_URL && process.env.UPSTASH_REDIS_REST_TOKEN) {
+    const url = process.env.UPSTASH_REDIS_REST_URL || process.env.KV_REST_API_URL;
+    const token = process.env.UPSTASH_REDIS_REST_TOKEN || process.env.KV_REST_API_TOKEN;
+
+    if (url && token) {
         const { Redis } = await import('@upstash/redis');
-        redis = new Redis({
-            url: process.env.UPSTASH_REDIS_REST_URL,
-            token: process.env.UPSTASH_REDIS_REST_TOKEN,
-        });
+        redis = new Redis({ url, token });
+        console.log('✅ Redis Cache Initialized:', url.includes('upstash') ? 'Upstash' : 'Vercel KV');
     }
 } catch (e) {
-    // @upstash/redis not installed or not configured - skip
+    console.error('Redis initialization failed:', e.message);
 }
 
 async function getFromKV(key) {
@@ -159,12 +160,12 @@ export async function POST(request) {
             fullTranslation = await translateChunk(text, langName, apiKey);
         } else {
             const chunks = splitIntoChunks(text, CHUNK_SIZE);
-            const translatedChunks = [];
+            console.log(`Processing ${chunks.length} chunks in parallel...`);
 
-            for (const chunk of chunks) {
-                const translated = await translateChunk(chunk, langName, apiKey);
-                translatedChunks.push(translated);
-            }
+            // Execute all chunks in parallel using Promise.all
+            const translatedChunks = await Promise.all(
+                chunks.map(chunk => translateChunk(chunk, langName, apiKey))
+            );
 
             fullTranslation = translatedChunks.join('\n');
         }

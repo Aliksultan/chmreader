@@ -96,6 +96,7 @@ export default function Reader({ params, searchParams }) {
   const [searchModalPage, setSearchModalPage] = useState(1);
   const RESULTS_PER_PAGE = 50;
   const iframeRef = useRef(null);
+  const pendingHighlightRef = useRef(null);
 
   // Translation States
   const [isTranslating, setIsTranslating] = useState(false);
@@ -117,11 +118,65 @@ export default function Reader({ params, searchParams }) {
   const [compareMode, setCompareMode] = useState(false);
   const [compareHtml, setCompareHtml] = useState('');
 
-  // Load saved API key
+  // Bookmarks
+  const [bookmarks, setBookmarks] = useState([]);
+  const [showBookmarks, setShowBookmarks] = useState(false);
+
+  // Sidebar tab
+  const [sidebarTab, setSidebarTab] = useState('toc'); // 'toc' | 'bookmarks'
+
+  // Load saved API key and bookmarks
   useEffect(() => {
     const savedKey = localStorage.getItem('gemini_api_key');
     if (savedKey) setGeminiApiKey(savedKey);
+    const savedBookmarks = localStorage.getItem(`bookmarks_${book}`);
+    if (savedBookmarks) {
+      try { setBookmarks(JSON.parse(savedBookmarks)); } catch (e) { }
+    }
   }, []);
+
+  // Navigation helpers
+  const getCurrentIndex = () => {
+    if (!flattenedToc.length || !currentPage) return -1;
+    const clean = currentPage.split('?')[0].split('#')[0];
+    return flattenedToc.findIndex(local => clean.endsWith('/' + local.split('?')[0].split('#')[0]));
+  };
+
+  const navigatePrev = () => {
+    const idx = getCurrentIndex();
+    if (idx > 0) {
+      setCurrentPage(`${cacheUrl || `/cache/${book.replace('.chm', '')}`}/${flattenedToc[idx - 1]}`);
+    }
+  };
+
+  const navigateNext = () => {
+    const idx = getCurrentIndex();
+    if (idx !== -1 && idx < flattenedToc.length - 1) {
+      setCurrentPage(`${cacheUrl || `/cache/${book.replace('.chm', '')}`}/${flattenedToc[idx + 1]}`);
+    }
+  };
+
+  const toggleBookmark = () => {
+    if (!currentPage) return;
+    const clean = currentPage.split('?')[0].split('#')[0];
+    const tocIndex = getCurrentIndex();
+    const title = tocIndex !== -1 ? (tocMap[flattenedToc[tocIndex]] || flattenedToc[tocIndex]) : clean.split('/').pop();
+    const exists = bookmarks.some(b => b.url === clean);
+    let updated;
+    if (exists) {
+      updated = bookmarks.filter(b => b.url !== clean);
+    } else {
+      updated = [...bookmarks, { url: clean, title, page: currentPage, addedAt: Date.now() }];
+    }
+    setBookmarks(updated);
+    localStorage.setItem(`bookmarks_${book}`, JSON.stringify(updated));
+  };
+
+  const isBookmarked = () => {
+    if (!currentPage) return false;
+    const clean = currentPage.split('?')[0].split('#')[0];
+    return bookmarks.some(b => b.url === clean);
+  };
 
   // Find the path in the TOC tree to a given local file
   const findPathInToc = useCallback((nodes, targetLocal, currentPath = '') => {
@@ -485,18 +540,161 @@ export default function Reader({ params, searchParams }) {
     return () => clearTimeout(delayDebounceFn);
   }, [searchQuery, book]);
 
-  // Escape to close search panel
+  // Keyboard shortcuts (Escape + ← →)
   useEffect(() => {
-    const handleEsc = (e) => {
+    const handleKeydown = (e) => {
+      // Don't trigger if typing in an input
+      if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
       if (e.key === 'Escape') setSearchQuery('');
+      if (e.key === 'ArrowLeft') navigatePrev();
+      if (e.key === 'ArrowRight') navigateNext();
     };
-    window.addEventListener('keydown', handleEsc);
-    return () => window.removeEventListener('keydown', handleEsc);
-  }, []);
+    window.addEventListener('keydown', handleKeydown);
+    return () => window.removeEventListener('keydown', handleKeydown);
+  }, [flattenedToc, currentPage, cacheUrl]);
+
+  // Swipe gestures on mobile
+  useEffect(() => {
+    const main = document.querySelector('.main-content');
+    if (!main) return;
+    let startX = 0, startY = 0;
+    const onStart = (e) => {
+      startX = e.touches[0].clientX;
+      startY = e.touches[0].clientY;
+    };
+    const onEnd = (e) => {
+      const dx = e.changedTouches[0].clientX - startX;
+      const dy = e.changedTouches[0].clientY - startY;
+      if (Math.abs(dx) > 80 && Math.abs(dx) > Math.abs(dy) * 1.5) {
+        if (dx > 0) navigatePrev();
+        else navigateNext();
+      }
+    };
+    main.addEventListener('touchstart', onStart, { passive: true });
+    main.addEventListener('touchend', onEnd, { passive: true });
+    return () => {
+      main.removeEventListener('touchstart', onStart);
+      main.removeEventListener('touchend', onEnd);
+    };
+  }, [flattenedToc, currentPage, cacheUrl]);
+
+  // Scroll sync in compare mode
+  useEffect(() => {
+    if (!compareMode || !compareHtml) return;
+    const iframe = iframeRef.current;
+    const compareEl = compareContentRef.current;
+    if (!iframe || !compareEl) return;
+    let syncing = false;
+    const syncFromIframe = () => {
+      if (syncing) return;
+      syncing = true;
+      try {
+        const doc = iframe.contentWindow.document;
+        const maxScroll = doc.documentElement.scrollHeight - doc.documentElement.clientHeight;
+        const pct = maxScroll > 0 ? doc.documentElement.scrollTop / maxScroll : 0;
+        const compareMax = compareEl.scrollHeight - compareEl.clientHeight;
+        compareEl.scrollTop = pct * compareMax;
+      } catch (e) { }
+      setTimeout(() => { syncing = false; }, 50);
+    };
+    try {
+      iframe.contentWindow.addEventListener('scroll', syncFromIframe);
+    } catch (e) { }
+    return () => {
+      try { iframe.contentWindow.removeEventListener('scroll', syncFromIframe); } catch (e) { }
+    };
+  }, [compareMode, compareHtml, currentPage]);
+
+  // Pinch-to-zoom on mobile
+  useEffect(() => {
+    let initialDist = 0;
+    let initialZoom = zoomLevel;
+    const getDistance = (touches) => {
+      const dx = touches[0].clientX - touches[1].clientX;
+      const dy = touches[0].clientY - touches[1].clientY;
+      return Math.sqrt(dx * dx + dy * dy);
+    };
+    const onTouchStart = (e) => {
+      if (e.touches.length === 2) {
+        initialDist = getDistance(e.touches);
+        initialZoom = zoomLevel;
+      }
+    };
+    const onTouchMove = (e) => {
+      if (e.touches.length === 2) {
+        const dist = getDistance(e.touches);
+        const scale = dist / initialDist;
+        const newZoom = Math.max(50, Math.min(200, Math.round(initialZoom * scale)));
+        setZoomLevel(newZoom);
+      }
+    };
+    document.addEventListener('touchstart', onTouchStart, { passive: true });
+    document.addEventListener('touchmove', onTouchMove, { passive: true });
+    return () => {
+      document.removeEventListener('touchstart', onTouchStart);
+      document.removeEventListener('touchmove', onTouchMove);
+    };
+  }, [zoomLevel]);
 
   const handleIframeLoad = () => {
     applyZoom();
-    applyIframeTheme(); // Inject basic dark mode to iframe if needed
+    applyIframeTheme();
+    // Highlight search term if we navigated from a search result
+    if (pendingHighlightRef.current && iframeRef.current?.contentWindow) {
+      const term = pendingHighlightRef.current;
+      pendingHighlightRef.current = null;
+      try {
+        const doc = iframeRef.current.contentWindow.document;
+        const body = doc.body;
+        if (!body) return;
+        // Use TreeWalker to find text nodes containing the term
+        const walker = doc.createTreeWalker(body, NodeFilter.SHOW_TEXT, null, false);
+        let firstMatch = null;
+        const matches = [];
+        while (walker.nextNode()) {
+          const node = walker.currentNode;
+          const idx = node.textContent.toLowerCase().indexOf(term.toLowerCase());
+          if (idx !== -1) {
+            matches.push({ node, idx });
+          }
+        }
+        // Wrap matches in <mark> elements
+        matches.forEach(({ node, idx }) => {
+          const range = doc.createRange();
+          range.setStart(node, idx);
+          range.setEnd(node, idx + term.length);
+          const mark = doc.createElement('mark');
+          mark.className = 'search-highlight';
+          mark.style.cssText = 'background: #fbbf24; color: #1a1a1a; padding: 1px 3px; border-radius: 3px; transition: background 0.5s;';
+          range.surroundContents(mark);
+          if (!firstMatch) firstMatch = mark;
+        });
+        // Scroll to first match
+        if (firstMatch) {
+          firstMatch.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          // Add a pulsing effect
+          firstMatch.style.background = '#f59e0b';
+          firstMatch.style.boxShadow = '0 0 8px rgba(245, 158, 11, 0.6)';
+        }
+        // Remove highlights after 7 seconds
+        setTimeout(() => {
+          try {
+            const marks = doc.querySelectorAll('mark.search-highlight');
+            marks.forEach(m => {
+              m.style.background = 'transparent';
+              m.style.boxShadow = 'none';
+              setTimeout(() => {
+                const parent = m.parentNode;
+                if (parent) {
+                  parent.replaceChild(doc.createTextNode(m.textContent), m);
+                  parent.normalize();
+                }
+              }, 500);
+            });
+          } catch (e) { }
+        }, 7000);
+      } catch (e) { console.warn('Highlight injection failed', e); }
+    }
   };
 
   const applyZoom = () => {
@@ -601,8 +799,19 @@ export default function Reader({ params, searchParams }) {
   // If there's an active result search string, inject it into the iframe after load
   // (Optional feature, omitting for now to keep things stable)
 
+  // Progress calculation
+  const currentIndex = getCurrentIndex();
+  const progressPercent = flattenedToc.length > 0 ? ((currentIndex + 1) / flattenedToc.length) * 100 : 0;
+
   return (
     <div className="reader-layout">
+      {/* Reading Progress Bar */}
+      {flattenedToc.length > 0 && (
+        <div className="progress-bar-container" title={`Section ${currentIndex + 1} of ${flattenedToc.length}`}>
+          <div className="progress-bar-fill" style={{ width: `${progressPercent}%` }} />
+        </div>
+      )}
+
       {/* Sidebar */}
       <aside className={`sidebar ${sidebarOpen ? 'open' : 'closed'}`}>
         <div className="sidebar-header glass-panel">
@@ -622,27 +831,70 @@ export default function Reader({ params, searchParams }) {
         <div className="sidebar-content">
           <h2 className="book-title-sidebar">{book.replace('.chm', '')}</h2>
 
-          {loading ? (
-            <div className="loader-container-small">
-              <div className="loader small"></div>
-            </div>
-          ) : error ? (
-            <div className="error-text">Failed to load content</div>
+          <div className="sidebar-tabs">
+            <button className={`sidebar-tab ${sidebarTab === 'toc' ? 'active' : ''}`} onClick={() => setSidebarTab('toc')}>
+              📖 Contents
+            </button>
+            <button className={`sidebar-tab ${sidebarTab === 'bookmarks' ? 'active' : ''}`} onClick={() => setSidebarTab('bookmarks')}>
+              ⭐ Bookmarks {bookmarks.length > 0 && <span className="bookmark-count">{bookmarks.length}</span>}
+            </button>
+          </div>
+
+          {sidebarTab === 'toc' ? (
+            <>
+              {loading ? (
+                <div className="loader-container-small">
+                  <div className="loader small"></div>
+                </div>
+              ) : error ? (
+                <div className="error-text">Failed to load content</div>
+              ) : (
+                <ul className="toc-list root-list">
+                  {toc.map((item, index) => (
+                    <TocNode
+                      key={index}
+                      item={item}
+                      cacheUrl={cacheUrl}
+                      setCurrentPage={setCurrentPage}
+                      currentPage={currentPage}
+                      expandedPaths={expandedPaths}
+                      onToggleExpand={onToggleExpand}
+                      nodePath={`/${index}`}
+                    />
+                  ))}
+                </ul>
+              )}
+            </>
           ) : (
-            <ul className="toc-list root-list">
-              {toc.map((item, index) => (
-                <TocNode
-                  key={index}
-                  item={item}
-                  cacheUrl={cacheUrl}
-                  setCurrentPage={setCurrentPage}
-                  currentPage={currentPage}
-                  expandedPaths={expandedPaths}
-                  onToggleExpand={onToggleExpand}
-                  nodePath={`/${index}`}
-                />
-              ))}
-            </ul>
+            <div className="bookmarks-list">
+              {bookmarks.length === 0 ? (
+                <div className="empty-bookmarks">
+                  <p>No bookmarks yet</p>
+                  <p className="text-small">Click the ⭐ button in the toolbar to bookmark the current page</p>
+                </div>
+              ) : (
+                bookmarks.map((bm, i) => (
+                  <button
+                    key={i}
+                    className={`bookmark-item ${currentPage && currentPage.includes(bm.url) ? 'active' : ''}`}
+                    onClick={() => setCurrentPage(bm.page)}
+                  >
+                    <span className="bookmark-title">{bm.title}</span>
+                    <button
+                      className="bookmark-remove"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        const updated = bookmarks.filter((_, idx) => idx !== i);
+                        setBookmarks(updated);
+                        localStorage.setItem(`bookmarks_${book}`, JSON.stringify(updated));
+                      }}
+                    >
+                      ✕
+                    </button>
+                  </button>
+                ))
+              )}
+            </div>
           )}
         </div>
       </aside>
@@ -691,7 +943,9 @@ export default function Reader({ params, searchParams }) {
                           key={i}
                           className="search-result-item"
                           onClick={() => {
+                            const query = searchQuery;
                             setCurrentPage(res.directUrl || res.link);
+                            pendingHighlightRef.current = query;
                             setSearchQuery(''); // Close panel on select
                             setIsSearchModalOpen(false);
                             if (iframeRef.current && iframeRef.current.contentWindow) {
@@ -722,42 +976,17 @@ export default function Reader({ params, searchParams }) {
             <div className="nav-controls">
               <button
                 className="icon-button"
-                onClick={() => {
-                  const cleanCurrentPage = currentPage ? currentPage.split('?')[0].split('#')[0] : '';
-                  const currentIndex = flattenedToc.findIndex(local => {
-                    return cleanCurrentPage.endsWith('/' + local.split('?')[0].split('#')[0]);
-                  });
-                  if (currentIndex > 0) {
-                    setCurrentPage(`${cacheUrl || `/cache/${book.replace('.chm', '')}`}/${flattenedToc[currentIndex - 1]}`);
-                  }
-                }}
-                disabled={(() => {
-                  if (!flattenedToc.length || !currentPage) return true;
-                  const cleanCurrentPage = currentPage.split('?')[0].split('#')[0];
-                  return flattenedToc.findIndex(local => cleanCurrentPage.endsWith('/' + local.split('?')[0].split('#')[0])) <= 0;
-                })()}
-                title="Previous Section"
+                onClick={navigatePrev}
+                disabled={getCurrentIndex() <= 0}
+                title="Previous Section (←)"
               >
                 ◀
               </button>
               <button
                 className="icon-button"
-                onClick={() => {
-                  const cleanCurrentPage = currentPage ? currentPage.split('?')[0].split('#')[0] : '';
-                  const currentIndex = flattenedToc.findIndex(local => {
-                    return cleanCurrentPage.endsWith('/' + local.split('?')[0].split('#')[0]);
-                  });
-                  if (currentIndex !== -1 && currentIndex < flattenedToc.length - 1) {
-                    setCurrentPage(`${cacheUrl || `/cache/${book.replace('.chm', '')}`}/${flattenedToc[currentIndex + 1]}`);
-                  }
-                }}
-                disabled={(() => {
-                  if (!flattenedToc.length || !currentPage) return true;
-                  const cleanCurrentPage = currentPage.split('?')[0].split('#')[0];
-                  const currentIndex = flattenedToc.findIndex(local => cleanCurrentPage.endsWith('/' + local.split('?')[0].split('#')[0]));
-                  return currentIndex === -1 || currentIndex >= flattenedToc.length - 1;
-                })()}
-                title="Next Section"
+                onClick={navigateNext}
+                disabled={getCurrentIndex() === -1 || getCurrentIndex() >= flattenedToc.length - 1}
+                title="Next Section (→)"
               >
                 ▶
               </button>
@@ -787,7 +1016,7 @@ export default function Reader({ params, searchParams }) {
                 disabled={isTranslating}
                 title="Translate to Russian"
               >
-                {isTranslating && activeLang === 'ru' ? '⏳' : '🇷🇺 RU'}
+                {isTranslating && activeLang === 'ru' ? '⏳' : `🇷🇺 RU${translationCacheRef.current['ru'] ? ' ✓' : ''}`}
               </button>
               <button
                 className={`lang-btn ${activeLang === 'kk' ? 'active' : ''}`}
@@ -795,9 +1024,17 @@ export default function Reader({ params, searchParams }) {
                 disabled={isTranslating}
                 title="Translate to Kazakh"
               >
-                {isTranslating && activeLang === 'kk' ? '⏳' : '🇰🇿 KZ'}
+                {isTranslating && activeLang === 'kk' ? '⏳' : `🇰🇿 KZ${translationCacheRef.current['kk'] ? ' ✓' : ''}`}
               </button>
             </div>
+
+            <button
+              className={`icon-button ${isBookmarked() ? 'primary bookmark-active' : ''}`}
+              onClick={toggleBookmark}
+              title={isBookmarked() ? 'Remove Bookmark' : 'Bookmark this page'}
+            >
+              {isBookmarked() ? '⭐' : '☆'}
+            </button>
 
             <button
               className={`icon-button ${compareMode ? 'primary' : ''}`}
@@ -1007,7 +1244,9 @@ export default function Reader({ params, searchParams }) {
                   key={i}
                   className="search-result-item modal-card"
                   onClick={() => {
+                    const query = searchQuery;
                     setCurrentPage(res.directUrl || res.link);
+                    pendingHighlightRef.current = query;
                     setSearchQuery(''); // Close both modal and toolbar dropdown
                     setIsSearchModalOpen(false);
                     if (iframeRef.current && iframeRef.current.contentWindow) {
@@ -1039,6 +1278,25 @@ export default function Reader({ params, searchParams }) {
           height: 100vh;
           overflow: hidden;
           background-color: var(--background);
+          position: relative;
+        }
+
+        .progress-bar-container {
+          position: fixed;
+          top: 0;
+          left: 0;
+          right: 0;
+          height: 3px;
+          background: var(--card-border);
+          z-index: 1000;
+          cursor: pointer;
+        }
+
+        .progress-bar-fill {
+          height: 100%;
+          background: linear-gradient(90deg, var(--primary), #a78bfa);
+          transition: width 0.3s ease;
+          border-radius: 0 2px 2px 0;
         }
         
         .sidebar {
@@ -1087,12 +1345,7 @@ export default function Reader({ params, searchParams }) {
         .back-button:hover {
           color: var(--primary);
         }
-        
-        .sidebar-content {
-          padding: 1.25rem;
-          overflow-y: auto;
-          flex-grow: 1;
-        }
+
         
         .book-title-sidebar {
           font-size: 1.1rem;
@@ -1938,6 +2191,137 @@ export default function Reader({ params, searchParams }) {
           flex-shrink: 0;
         }
 
+        .sidebar-content {
+          flex-grow: 1;
+          overflow-y: auto;
+          overflow-x: hidden;
+          padding: 0.5rem 0;
+        }
+
+        .sidebar-tabs {
+          display: flex;
+          padding: 0.5rem 0.75rem;
+          gap: 0.5rem;
+          border-bottom: 1px solid var(--card-border);
+        }
+
+        .sidebar-tab {
+          flex: 1;
+          padding: 0.5rem 0.75rem;
+          border: none;
+          background: transparent;
+          color: var(--text-muted);
+          font-size: 0.8rem;
+          font-weight: 600;
+          cursor: pointer;
+          border-radius: var(--radius-sm);
+          transition: all 0.2s;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          gap: 0.4rem;
+        }
+
+        .sidebar-tab:hover {
+          background: var(--card-hover);
+          color: var(--text-primary);
+        }
+
+        .sidebar-tab.active {
+          background: var(--primary-glow);
+          color: var(--primary);
+        }
+
+        .bookmark-count {
+          background: var(--primary);
+          color: white;
+          font-size: 0.65rem;
+          padding: 1px 6px;
+          border-radius: 99px;
+          min-width: 18px;
+          text-align: center;
+        }
+
+        .bookmarks-list {
+          padding: 0.5rem;
+        }
+
+        .empty-bookmarks {
+          padding: 2rem 1rem;
+          text-align: center;
+          color: var(--text-muted);
+        }
+
+        .empty-bookmarks p:first-child {
+          font-size: 0.95rem;
+          font-weight: 500;
+          margin-bottom: 0.5rem;
+        }
+
+        .text-small {
+          font-size: 0.78rem;
+          opacity: 0.7;
+        }
+
+        .bookmark-item {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          width: 100%;
+          padding: 0.6rem 0.75rem;
+          background: transparent;
+          border: none;
+          border-bottom: 1px solid var(--card-border);
+          color: var(--text-primary);
+          cursor: pointer;
+          transition: all 0.15s;
+          text-align: left;
+          font-size: 0.82rem;
+          gap: 0.5rem;
+        }
+
+        .bookmark-item:hover {
+          background: var(--card-hover);
+        }
+
+        .bookmark-item.active {
+          background: var(--primary-glow);
+          color: var(--primary);
+        }
+
+        .bookmark-title {
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+          flex: 1;
+        }
+
+        .bookmark-remove {
+          background: none;
+          border: none;
+          color: var(--text-muted);
+          cursor: pointer;
+          padding: 2px 6px;
+          border-radius: var(--radius-sm);
+          font-size: 0.75rem;
+          flex-shrink: 0;
+          transition: all 0.15s;
+        }
+
+        .bookmark-remove:hover {
+          background: rgba(239, 68, 68, 0.15);
+          color: #ef4444;
+        }
+
+        .bookmark-active {
+          animation: bookmark-pop 0.3s ease;
+        }
+
+        @keyframes bookmark-pop {
+          0% { transform: scale(1); }
+          50% { transform: scale(1.3); }
+          100% { transform: scale(1); }
+        }
         .compare-content {
           flex: 1;
           overflow-y: auto;
