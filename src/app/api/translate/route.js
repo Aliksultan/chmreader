@@ -134,8 +134,8 @@ export async function POST(request) {
     try {
         const { text, targetLang, apiKey, pageKey } = await request.json();
 
-        if (!text || !targetLang || !apiKey) {
-            return NextResponse.json({ error: 'Missing required fields: text, targetLang, apiKey' }, { status: 400 });
+        if (!text || !targetLang) {
+            return NextResponse.json({ error: 'Missing required fields: text, targetLang' }, { status: 400 });
         }
 
         const langNames = {
@@ -145,13 +145,18 @@ export async function POST(request) {
 
         const langName = langNames[targetLang] || targetLang;
 
-        // Check Vercel KV cache if pageKey is provided
+        // Check Vercel KV cache FIRST (allows free reads without API key)
         const kvKey = pageKey ? `tr:${pageKey}:${targetLang}` : null;
         if (kvKey) {
             const cached = await getFromKV(kvKey);
             if (cached) {
                 return NextResponse.json({ translation: cached, source: 'kv-cache' });
             }
+        }
+
+        // Cache miss. Now we strictly require the API key to generate a new translation.
+        if (!apiKey) {
+            return NextResponse.json({ error: 'API_KEY_REQUIRED' }, { status: 401 });
         }
 
         let fullTranslation;

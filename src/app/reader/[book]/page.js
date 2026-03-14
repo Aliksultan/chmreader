@@ -2,6 +2,10 @@
 
 import { useEffect, useState, use, useRef, useCallback } from 'react';
 import Link from 'next/link';
+import dynamic from 'next/dynamic';
+
+const ReactQuill = dynamic(() => import('react-quill-new'), { ssr: false });
+import 'react-quill-new/dist/quill.snow.css';
 
 function TocNode({ item, cacheUrl, setCurrentPage, currentPage, level = 0, expandedPaths, onToggleExpand, nodePath }) {
   const hasChildren = item.children && item.children.length > 0;
@@ -114,9 +118,12 @@ export default function Reader({ params, searchParams }) {
   const [aiMode, setAiMode] = useState(''); // 'summarize' | 'explain'
   const [pendingAiMode, setPendingAiMode] = useState(null);
 
-  // Comparative Mode
+  // Comparative Mode & Editing
   const [compareMode, setCompareMode] = useState(false);
   const [compareHtml, setCompareHtml] = useState('');
+  const [isEditing, setIsEditing] = useState(false);
+  const [editorContent, setEditorContent] = useState('');
+  const [isSaving, setIsSaving] = useState(false);
 
   // Bookmarks
   const [bookmarks, setBookmarks] = useState([]);
@@ -228,12 +235,47 @@ export default function Reader({ params, searchParams }) {
     }
   }, [currentPage, expandTocPathForPage]);
 
-  const handleTranslate = async (targetLang) => {
-    if (!geminiApiKey) {
-      setPendingLang(targetLang);
-      setShowApiKeyInput(true);
-      return;
+  const handleSaveTranslation = async () => {
+    const pwd = prompt('Enter Editor Password (leave blank if none is set):', '');
+    if (pwd === null) return; // cancelled
+
+    setIsSaving(true);
+    const pageKey = (currentPage || '').replace(/^.*\/cache\//, '').replace(/[^a-zA-Z0-9]/g, '_');
+
+    try {
+      const res = await fetch('/api/translate/update', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          pageKey,
+          targetLang: activeLang,
+          html: editorContent,
+          password: pwd
+        })
+      });
+      const data = await res.json();
+      if (data.error) {
+        alert('Save failed: ' + data.error);
+      } else {
+        translationCacheRef.current[activeLang] = editorContent;
+        setIsEditing(false);
+        if (compareMode) {
+          setCompareHtml(editorContent);
+        } else {
+          if (iframeRef.current?.contentWindow) {
+            iframeRef.current.contentWindow.document.body.innerHTML = editorContent;
+            applyIframeTheme();
+          }
+        }
+      }
+    } catch (err) {
+      alert('Save error: ' + err.message);
+    } finally {
+      setIsSaving(false);
     }
+  };
+
+  const handleTranslate = async (targetLang) => {
     if (!iframeRef.current || !iframeRef.current.contentWindow) return;
     const doc = iframeRef.current.contentWindow.document;
     if (!doc.body) return;
@@ -255,36 +297,10 @@ export default function Reader({ params, searchParams }) {
     const pageKey = (currentPage || '').replace(/^.*\/cache\//, '').replace(/[^a-zA-Z0-9]/g, '_');
     const cacheKey = `tr_${pageKey}_${targetLang}`;
 
-    // Check in-memory cache first, then localStorage
-    if (translationCacheRef.current[targetLang]) {
-      if (compareMode) {
-        setCompareHtml(translationCacheRef.current[targetLang]);
-        doc.body.innerHTML = originalHtmlRef.current;
-      } else {
-        doc.body.innerHTML = translationCacheRef.current[targetLang];
-      }
-      setActiveLang(targetLang);
-      applyIframeTheme();
-      return;
-    }
+    // Only fetch if not already loaded into the iframe currently
+    const currentIframeContent = doc.body.innerHTML;
 
-    try {
-      const stored = localStorage.getItem(cacheKey);
-      if (stored) {
-        translationCacheRef.current[targetLang] = stored;
-        if (compareMode) {
-          setCompareHtml(stored);
-          doc.body.innerHTML = originalHtmlRef.current;
-        } else {
-          doc.body.innerHTML = stored;
-        }
-        setActiveLang(targetLang);
-        applyIframeTheme();
-        return;
-      }
-    } catch (e) { /* localStorage unavailable */ }
-
-    // Otherwise, translate via API
+    // Otherwise, translate via API (which checks the fresh Redis cache first)
     try {
       // Extract text from original (without replacing iframe content)
       const tempDiv = document.createElement('div');
@@ -307,13 +323,20 @@ export default function Reader({ params, searchParams }) {
       });
 
       const data = await res.json();
+
+      if (res.status === 401 || data.error === 'API_KEY_REQUIRED') {
+        setIsTranslating(false);
+        setPendingLang(targetLang);
+        setShowApiKeyInput(true);
+        return;
+      }
+
       if (data.error) {
         alert(`Translation error: ${data.error}`);
       } else {
         const translatedHtml = data.translation;
-        // Cache in memory and localStorage
+        // Cache in memory for this session
         translationCacheRef.current[targetLang] = translatedHtml;
-        try { localStorage.setItem(cacheKey, translatedHtml); } catch (e) { /* quota exceeded */ }
 
         // NOW swap the content
         setActiveLang(targetLang);
@@ -1061,6 +1084,29 @@ export default function Reader({ params, searchParams }) {
               ⚖️
             </button>
 
+            <button
+              className={`icon-button ${isEditing ? 'primary' : ''}`}
+              onClick={() => {
+                if (isEditing) {
+                  handleSaveTranslation();
+                } else if (activeLang !== 'tr' && translationCacheRef.current[activeLang]) {
+                  setEditorContent(translationCacheRef.current[activeLang]);
+                  setIsEditing(true);
+                  if (!compareMode) setCompareMode(true);
+                  if (!compareHtml) setCompareHtml(translationCacheRef.current[activeLang]);
+                }
+              }}
+              disabled={activeLang === 'tr' || isSaving}
+              title={isEditing ? 'Save Translation' : 'Edit Translation'}
+            >
+              {isSaving ? '⏳' : (isEditing ? '💾' : '✏️')}
+            </button>
+            {isEditing && (
+              <button className="icon-button" onClick={() => setIsEditing(false)} title="Cancel Edit">
+                ❌
+              </button>
+            )}
+
             <div className="ai-controls">
               <button
                 className="icon-button ai-btn"
@@ -1150,8 +1196,17 @@ export default function Reader({ params, searchParams }) {
                   title="Drag to resize"
                 />
                 <div className="compare-right" style={{ flex: `0 0 ${100 - splitPercent}%` }}>
-                  <div className="compare-label">{activeLang === 'ru' ? '🇷🇺 Russian' : '🇰🇿 Kazakh'}</div>
-                  <div ref={compareContentRef} className={`compare-content ${theme === 'dark' ? 'compare-dark' : ''}`} dangerouslySetInnerHTML={{ __html: compareHtml }} />
+                  <div className="compare-label">
+                    {activeLang === 'ru' ? '🇷🇺 Russian' : '🇰🇿 Kazakh'}
+                    {isEditing && <span style={{ marginLeft: '10px', color: 'var(--primary)', fontSize: '0.8em' }}>(Editing Mode)</span>}
+                  </div>
+                  {isEditing ? (
+                    <div className={`editor-container ${theme === 'dark' ? 'dark-editor' : ''}`}>
+                      <ReactQuill theme="snow" value={editorContent} onChange={setEditorContent} />
+                    </div>
+                  ) : (
+                    <div ref={compareContentRef} className={`compare-content ${theme === 'dark' ? 'compare-dark' : ''}`} dangerouslySetInnerHTML={{ __html: compareHtml }} />
+                  )}
                 </div>
               </>
             )}
@@ -2390,6 +2445,45 @@ export default function Reader({ params, searchParams }) {
 
         .compare-content li {
           margin: 0.3rem 0;
+        }
+
+        /* ReactQuill Editor Styles */
+        .editor-container {
+          flex-grow: 1;
+          display: flex;
+          flex-direction: column;
+          overflow: hidden;
+          background: #fff;
+          color: #000;
+          height: 100%;
+        }
+
+        .editor-container .quill {
+          height: 100%;
+          display: flex;
+          flex-direction: column;
+        }
+
+        .editor-container .ql-container {
+          flex-grow: 1;
+          overflow-y: auto;
+          font-family: inherit;
+          font-size: 1.05rem;
+          line-height: 1.6;
+        }
+        
+        .dark-editor {
+          background: #1e293b;
+          color: #f8fafc;
+        }
+        
+        .dark-editor .ql-toolbar {
+          background: #e2e8f0;
+          border-color: #475569 !important;
+        }
+        
+        .dark-editor .ql-container {
+          border-color: #475569 !important;
         }
 
         /* Mobile Responsive */
