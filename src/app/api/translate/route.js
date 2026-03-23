@@ -145,7 +145,7 @@ export async function POST(request) {
 
         const langName = langNames[targetLang] || targetLang;
 
-        // Check Vercel KV cache FIRST (allows free reads without API key)
+        // 1) Check Redis cache FIRST — no API key needed for cached translations
         const kvKey = pageKey ? `tr:${pageKey}:${targetLang}` : null;
         if (kvKey) {
             const cached = await getFromKV(kvKey);
@@ -154,7 +154,7 @@ export async function POST(request) {
             }
         }
 
-        // Cache miss. Now we strictly require the API key to generate a new translation.
+        // 2) No cache hit — need API key to generate a fresh translation
         if (!apiKey) {
             return NextResponse.json({ error: 'API_KEY_REQUIRED' }, { status: 401 });
         }

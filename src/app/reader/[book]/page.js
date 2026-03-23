@@ -2,10 +2,6 @@
 
 import { useEffect, useState, use, useRef, useCallback } from 'react';
 import Link from 'next/link';
-import dynamic from 'next/dynamic';
-
-const ReactQuill = dynamic(() => import('react-quill-new'), { ssr: false });
-import 'react-quill-new/dist/quill.snow.css';
 
 function TocNode({ item, cacheUrl, setCurrentPage, currentPage, level = 0, expandedPaths, onToggleExpand, nodePath }) {
   const hasChildren = item.children && item.children.length > 0;
@@ -118,12 +114,14 @@ export default function Reader({ params, searchParams }) {
   const [aiMode, setAiMode] = useState(''); // 'summarize' | 'explain'
   const [pendingAiMode, setPendingAiMode] = useState(null);
 
-  // Comparative Mode & Editing
+  // Comparative Mode
   const [compareMode, setCompareMode] = useState(false);
   const [compareHtml, setCompareHtml] = useState('');
+
+  // Translation Editing
   const [isEditing, setIsEditing] = useState(false);
-  const [editorContent, setEditorContent] = useState('');
   const [isSaving, setIsSaving] = useState(false);
+  const editorRef = useRef(null);
 
   // Bookmarks
   const [bookmarks, setBookmarks] = useState([]);
@@ -235,38 +233,54 @@ export default function Reader({ params, searchParams }) {
     }
   }, [currentPage, expandTocPathForPage]);
 
-  const handleSaveTranslation = async () => {
-    const pwd = prompt('Enter Editor Password (leave blank if none is set):', '');
-    if (pwd === null) return; // cancelled
+  // ─── Editor helpers ───
+  const execFormat = (cmd, value = null) => {
+    document.execCommand(cmd, false, value);
+    editorRef.current?.focus();
+  };
 
-    setIsSaving(true);
+  const startEditing = () => {
+    if (activeLang === 'tr' || !translationCacheRef.current[activeLang]) return;
+    setIsEditing(true);
+    // Force compare mode so we see original + editable translation side by side
+    if (!compareMode) {
+      setCompareMode(true);
+      setCompareHtml(translationCacheRef.current[activeLang]);
+      if (originalHtmlRef.current && iframeRef.current?.contentWindow?.document?.body) {
+        iframeRef.current.contentWindow.document.body.innerHTML = originalHtmlRef.current;
+        applyIframeTheme();
+      }
+    }
+  };
+
+  const cancelEditing = () => {
+    setIsEditing(false);
+    // Revert the compare panel to the saved translation
+    if (translationCacheRef.current[activeLang]) {
+      setCompareHtml(translationCacheRef.current[activeLang]);
+    }
+  };
+
+  const saveTranslation = async () => {
+    if (!editorRef.current) return;
+    const editedHtml = editorRef.current.innerHTML;
     const pageKey = (currentPage || '').replace(/^.*\/cache\//, '').replace(/[^a-zA-Z0-9]/g, '_');
 
+    setIsSaving(true);
     try {
       const res = await fetch('/api/translate/update', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          pageKey,
-          targetLang: activeLang,
-          html: editorContent,
-          password: pwd
-        })
+        body: JSON.stringify({ pageKey, targetLang: activeLang, html: editedHtml, password: '' })
       });
       const data = await res.json();
       if (data.error) {
         alert('Save failed: ' + data.error);
       } else {
-        translationCacheRef.current[activeLang] = editorContent;
+        // Persist to in-memory cache so the app uses the edited version
+        translationCacheRef.current[activeLang] = editedHtml;
+        setCompareHtml(editedHtml);
         setIsEditing(false);
-        if (compareMode) {
-          setCompareHtml(editorContent);
-        } else {
-          if (iframeRef.current?.contentWindow) {
-            iframeRef.current.contentWindow.document.body.innerHTML = editorContent;
-            applyIframeTheme();
-          }
-        }
       }
     } catch (err) {
       alert('Save error: ' + err.message);
@@ -275,17 +289,21 @@ export default function Reader({ params, searchParams }) {
     }
   };
 
+  // ─── Translation (cache-first – no API key needed for cached) ───
   const handleTranslate = async (targetLang) => {
     if (!iframeRef.current || !iframeRef.current.contentWindow) return;
     const doc = iframeRef.current.contentWindow.document;
     if (!doc.body) return;
 
-    // Save original HTML if not already saved
+    // Save original HTML once
     if (!originalHtmlRef.current) {
       originalHtmlRef.current = doc.body.innerHTML;
     }
 
-    // If switching back to Turkish, restore original
+    // Exit editing when switching languages
+    setIsEditing(false);
+
+    // Switching back to Turkish — just restore original
     if (targetLang === 'tr') {
       doc.body.innerHTML = originalHtmlRef.current;
       setActiveLang('tr');
@@ -293,37 +311,39 @@ export default function Reader({ params, searchParams }) {
       return;
     }
 
-    // Build a cache key from the page path
     const pageKey = (currentPage || '').replace(/^.*\/cache\//, '').replace(/[^a-zA-Z0-9]/g, '_');
-    const cacheKey = `tr_${pageKey}_${targetLang}`;
 
-    // Only fetch if not already loaded into the iframe currently
-    const currentIframeContent = doc.body.innerHTML;
+    // 1) In-memory cache
+    if (translationCacheRef.current[targetLang]) {
+      setActiveLang(targetLang);
+      if (compareMode) {
+        setCompareHtml(translationCacheRef.current[targetLang]);
+        doc.body.innerHTML = originalHtmlRef.current;
+      } else {
+        doc.body.innerHTML = translationCacheRef.current[targetLang];
+      }
+      applyIframeTheme();
+      return;
+    }
 
-    // Otherwise, translate via API (which checks the fresh Redis cache first)
+    // 2) Call API (checks Redis first, then translates if API key present)
     try {
-      // Extract text from original (without replacing iframe content)
       const tempDiv = document.createElement('div');
       tempDiv.innerHTML = originalHtmlRef.current;
       const bodyText = tempDiv.innerText || '';
       if (!bodyText.trim()) return;
 
       setIsTranslating(true);
-      // Keep showing Turkish original while translating — DON'T set activeLang yet
 
       const res = await fetch('/api/translate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          text: bodyText,
-          targetLang: targetLang,
-          apiKey: geminiApiKey,
-          pageKey: pageKey
-        })
+        body: JSON.stringify({ text: bodyText, targetLang, apiKey: geminiApiKey, pageKey })
       });
 
       const data = await res.json();
 
+      // No cache and no API key → prompt for key
       if (res.status === 401 || data.error === 'API_KEY_REQUIRED') {
         setIsTranslating(false);
         setPendingLang(targetLang);
@@ -335,10 +355,7 @@ export default function Reader({ params, searchParams }) {
         alert(`Translation error: ${data.error}`);
       } else {
         const translatedHtml = data.translation;
-        // Cache in memory for this session
         translationCacheRef.current[targetLang] = translatedHtml;
-
-        // NOW swap the content
         setActiveLang(targetLang);
         if (compareMode) {
           setCompareHtml(translatedHtml);
@@ -774,32 +791,6 @@ export default function Reader({ params, searchParams }) {
     if (iframeRef.current && iframeRef.current.contentWindow) {
       try {
         const doc = iframeRef.current.contentWindow.document;
-
-        // Base Readability Styles (applies to both light and dark)
-        let layoutStyle = doc.getElementById('reader-layout-override');
-        if (!layoutStyle) {
-          layoutStyle = doc.createElement('style');
-          layoutStyle.id = 'reader-layout-override';
-          doc.head.appendChild(layoutStyle);
-        }
-        layoutStyle.innerHTML = `
-          body {
-            max-width: 800px !important;
-            margin: 0 auto !important;
-            padding: 2rem !important;
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif !important;
-            font-size: 1.1rem !important;
-            line-height: 1.7 !important;
-          }
-          img {
-            max-width: 100% !important;
-            height: auto !important;
-          }
-          @media (max-width: 768px) {
-            body { padding: 1rem !important; }
-          }
-        `;
-
         const isDark = theme === 'dark' || (theme === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches);
 
         if (isDark) {
@@ -1110,27 +1101,34 @@ export default function Reader({ params, searchParams }) {
               ⚖️
             </button>
 
-            <button
-              className={`icon-button ${isEditing ? 'primary' : ''}`}
-              onClick={() => {
-                if (isEditing) {
-                  handleSaveTranslation();
-                } else if (activeLang !== 'tr' && translationCacheRef.current[activeLang]) {
-                  setEditorContent(translationCacheRef.current[activeLang]);
-                  setIsEditing(true);
-                  if (!compareMode) setCompareMode(true);
-                  if (!compareHtml) setCompareHtml(translationCacheRef.current[activeLang]);
-                }
-              }}
-              disabled={activeLang === 'tr' || isSaving}
-              title={isEditing ? 'Save Translation' : 'Edit Translation'}
-            >
-              {isSaving ? '⏳' : (isEditing ? '💾' : '✏️')}
-            </button>
-            {isEditing && (
-              <button className="icon-button" onClick={() => setIsEditing(false)} title="Cancel Edit">
-                ❌
+            {/* Edit / Save / Cancel */}
+            {!isEditing ? (
+              <button
+                className="icon-button"
+                onClick={startEditing}
+                disabled={activeLang === 'tr'}
+                title="Edit Translation"
+              >
+                ✏️
               </button>
+            ) : (
+              <>
+                <button
+                  className="icon-button primary"
+                  onClick={saveTranslation}
+                  disabled={isSaving}
+                  title="Save Translation"
+                >
+                  {isSaving ? '⏳' : '💾'}
+                </button>
+                <button
+                  className="icon-button"
+                  onClick={cancelEditing}
+                  title="Cancel Edit"
+                >
+                  ❌
+                </button>
+              </>
             )}
 
             <div className="ai-controls">
@@ -1224,15 +1222,35 @@ export default function Reader({ params, searchParams }) {
                 <div className="compare-right" style={{ flex: `0 0 ${100 - splitPercent}%` }}>
                   <div className="compare-label">
                     {activeLang === 'ru' ? '🇷🇺 Russian' : '🇰🇿 Kazakh'}
-                    {isEditing && <span style={{ marginLeft: '10px', color: 'var(--primary)', fontSize: '0.8em' }}>(Editing Mode)</span>}
+                    {isEditing && <span className="editing-badge">Editing</span>}
                   </div>
-                  {isEditing ? (
-                    <div className={`editor-container ${theme === 'dark' ? 'dark-editor' : ''}`}>
-                      <ReactQuill theme="snow" value={editorContent} onChange={setEditorContent} />
+
+                  {/* Formatting toolbar — only visible when editing */}
+                  {isEditing && (
+                    <div className="editor-toolbar">
+                      <button onMouseDown={e => { e.preventDefault(); execFormat('bold'); }} title="Bold"><b>B</b></button>
+                      <button onMouseDown={e => { e.preventDefault(); execFormat('italic'); }} title="Italic"><i>I</i></button>
+                      <button onMouseDown={e => { e.preventDefault(); execFormat('underline'); }} title="Underline"><u>U</u></button>
+                      <span className="editor-sep" />
+                      <button onMouseDown={e => { e.preventDefault(); execFormat('formatBlock', '<h3>'); }} title="Heading">H3</button>
+                      <button onMouseDown={e => { e.preventDefault(); execFormat('formatBlock', '<p>'); }} title="Paragraph">¶</button>
+                      <button onMouseDown={e => { e.preventDefault(); execFormat('insertUnorderedList'); }} title="Bullet list">• List</button>
+                      <button onMouseDown={e => { e.preventDefault(); execFormat('insertOrderedList'); }} title="Numbered list">1. List</button>
+                      <span className="editor-sep" />
+                      <button onMouseDown={e => { e.preventDefault(); execFormat('removeFormat'); }} title="Clear formatting">✕</button>
+                      <button onMouseDown={e => { e.preventDefault(); execFormat('undo'); }} title="Undo">↩</button>
+                      <button onMouseDown={e => { e.preventDefault(); execFormat('redo'); }} title="Redo">↪</button>
                     </div>
-                  ) : (
-                    <div ref={compareContentRef} className={`compare-content ${theme === 'dark' ? 'compare-dark' : ''}`} dangerouslySetInnerHTML={{ __html: compareHtml }} />
                   )}
+
+                  {/* Editable / Read-only content */}
+                  <div
+                    ref={el => { compareContentRef.current = el; if (isEditing) editorRef.current = el; }}
+                    className={`compare-content ${theme === 'dark' ? 'compare-dark' : ''} ${isEditing ? 'editor-active' : ''}`}
+                    contentEditable={isEditing}
+                    suppressContentEditableWarning
+                    dangerouslySetInnerHTML={{ __html: compareHtml }}
+                  />
                 </div>
               </>
             )}
@@ -2422,6 +2440,75 @@ export default function Reader({ params, searchParams }) {
           color: #e2e8f0;
         }
 
+        /* ─── Translation Editor ─── */
+        .editing-badge {
+          margin-left: 8px;
+          font-size: 0.75rem;
+          color: var(--primary);
+          font-weight: 600;
+          letter-spacing: 0.03em;
+        }
+
+        .editor-toolbar {
+          display: flex;
+          align-items: center;
+          gap: 3px;
+          padding: 5px 10px;
+          background: var(--toolbar-bg);
+          backdrop-filter: blur(12px);
+          border-bottom: 1px solid var(--card-border);
+          flex-shrink: 0;
+          flex-wrap: wrap;
+        }
+
+        .editor-toolbar button {
+          background: transparent;
+          border: 1px solid transparent;
+          color: var(--text-primary);
+          cursor: pointer;
+          padding: 3px 7px;
+          border-radius: var(--radius-sm);
+          font-size: 0.8rem;
+          font-family: inherit;
+          min-width: 28px;
+          height: 28px;
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          transition: all 0.12s;
+        }
+
+        .editor-toolbar button:hover {
+          background: var(--card-hover);
+          border-color: var(--card-border);
+        }
+
+        .editor-toolbar button:active {
+          background: var(--primary-glow);
+          color: var(--primary);
+        }
+
+        .editor-sep {
+          width: 1px;
+          height: 18px;
+          background: var(--card-border);
+          margin: 0 4px;
+          flex-shrink: 0;
+        }
+
+        .compare-content.editor-active {
+          cursor: text;
+          outline: none;
+          border: 2px solid var(--primary);
+          border-radius: 0 0 var(--radius-sm) var(--radius-sm);
+          padding: 1.5rem;
+          min-height: 300px;
+        }
+
+        .compare-content.editor-active:focus {
+          box-shadow: 0 0 0 4px var(--primary-glow);
+        }
+
         .split-divider {
           flex-shrink: 0;
           width: 6px;
@@ -2471,45 +2558,6 @@ export default function Reader({ params, searchParams }) {
 
         .compare-content li {
           margin: 0.3rem 0;
-        }
-
-        /* ReactQuill Editor Styles */
-        .editor-container {
-          flex-grow: 1;
-          display: flex;
-          flex-direction: column;
-          overflow: hidden;
-          background: #fff;
-          color: #000;
-          height: 100%;
-        }
-
-        .editor-container .quill {
-          height: 100%;
-          display: flex;
-          flex-direction: column;
-        }
-
-        .editor-container .ql-container {
-          flex-grow: 1;
-          overflow-y: auto;
-          font-family: inherit;
-          font-size: 1.05rem;
-          line-height: 1.6;
-        }
-        
-        .dark-editor {
-          background: #1e293b;
-          color: #f8fafc;
-        }
-        
-        .dark-editor .ql-toolbar {
-          background: #e2e8f0;
-          border-color: #475569 !important;
-        }
-        
-        .dark-editor .ql-container {
-          border-color: #475569 !important;
         }
 
         /* Mobile Responsive */
