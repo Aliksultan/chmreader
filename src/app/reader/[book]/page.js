@@ -86,7 +86,16 @@ export default function Reader({ params, searchParams }) {
 
   // New Toolbar States
   const [theme, setTheme] = useState('system');
-  const [zoomLevel, setZoomLevel] = useState(100);
+  const [zoomLevel, setZoomLevel] = useState(() => {
+    if (typeof window !== 'undefined') {
+      const saved = localStorage.getItem('reader_zoom');
+      return saved ? parseInt(saved, 10) : 100;
+    }
+    return 100;
+  });
+  const [tocFilter, setTocFilter] = useState('');
+  const [iframeLoading, setIframeLoading] = useState(false);
+  const scrollPositionsRef = useRef({});
   const [searchQuery, setSearchQuery] = useState('');
 
   // Book-Wide Search
@@ -130,7 +139,7 @@ export default function Reader({ params, searchParams }) {
   // Sidebar tab
   const [sidebarTab, setSidebarTab] = useState('toc'); // 'toc' | 'bookmarks'
 
-  // Load saved API key and bookmarks
+  // Load saved API key, bookmarks, and persist zoom
   useEffect(() => {
     const savedKey = localStorage.getItem('gemini_api_key');
     if (savedKey) setGeminiApiKey(savedKey);
@@ -139,6 +148,11 @@ export default function Reader({ params, searchParams }) {
       try { setBookmarks(JSON.parse(savedBookmarks)); } catch (e) { }
     }
   }, []);
+
+  // Persist zoom level
+  useEffect(() => {
+    localStorage.setItem('reader_zoom', String(zoomLevel));
+  }, [zoomLevel]);
 
   // Navigation helpers
   const getCurrentIndex = () => {
@@ -150,6 +164,8 @@ export default function Reader({ params, searchParams }) {
   const navigatePrev = () => {
     const idx = getCurrentIndex();
     if (idx > 0) {
+      saveScrollPosition();
+      setIframeLoading(true);
       setCurrentPage(`${cacheUrl || `/cache/${book.replace('.chm', '')}`}/${flattenedToc[idx - 1]}`);
     }
   };
@@ -157,6 +173,8 @@ export default function Reader({ params, searchParams }) {
   const navigateNext = () => {
     const idx = getCurrentIndex();
     if (idx !== -1 && idx < flattenedToc.length - 1) {
+      saveScrollPosition();
+      setIframeLoading(true);
       setCurrentPage(`${cacheUrl || `/cache/${book.replace('.chm', '')}`}/${flattenedToc[idx + 1]}`);
     }
   };
@@ -248,7 +266,7 @@ export default function Reader({ params, searchParams }) {
       setCompareHtml(translationCacheRef.current[activeLang]);
       if (originalHtmlRef.current && iframeRef.current?.contentWindow?.document?.body) {
         iframeRef.current.contentWindow.document.body.innerHTML = originalHtmlRef.current;
-        applyIframeTheme();
+        applyIframeTheme(activeLang);
       }
     }
   };
@@ -307,7 +325,7 @@ export default function Reader({ params, searchParams }) {
     if (targetLang === 'tr') {
       doc.body.innerHTML = originalHtmlRef.current;
       setActiveLang('tr');
-      applyIframeTheme();
+      applyIframeTheme('tr');
       return;
     }
 
@@ -322,7 +340,7 @@ export default function Reader({ params, searchParams }) {
       } else {
         doc.body.innerHTML = translationCacheRef.current[targetLang];
       }
-      applyIframeTheme();
+      applyIframeTheme(targetLang);
       return;
     }
 
@@ -362,7 +380,7 @@ export default function Reader({ params, searchParams }) {
         } else {
           doc.body.innerHTML = translatedHtml;
         }
-        applyIframeTheme();
+        applyIframeTheme(targetLang);
       }
     } catch (err) {
       alert(`Translation error: ${err.message}`);
@@ -575,7 +593,7 @@ export default function Reader({ params, searchParams }) {
           console.error(err);
           setIsSearching(false);
         });
-    }, 600);
+    }, 300);
 
     return () => clearTimeout(delayDebounceFn);
   }, [searchQuery, book]);
@@ -583,8 +601,9 @@ export default function Reader({ params, searchParams }) {
   // Keyboard shortcuts (Escape + ← →)
   useEffect(() => {
     const handleKeydown = (e) => {
-      // Don't trigger if typing in an input
+      // Don't trigger if typing in an input, textarea, or contentEditable
       if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+      if (e.target.isContentEditable) return;
       if (e.key === 'Escape') setSearchQuery('');
       if (e.key === 'ArrowLeft') navigatePrev();
       if (e.key === 'ArrowRight') navigateNext();
@@ -676,9 +695,30 @@ export default function Reader({ params, searchParams }) {
     };
   }, [zoomLevel]);
 
+  // Save scroll position before page change
+  const saveScrollPosition = () => {
+    try {
+      if (currentPage && iframeRef.current?.contentWindow?.document?.documentElement) {
+        scrollPositionsRef.current[currentPage] = iframeRef.current.contentWindow.document.documentElement.scrollTop;
+      }
+    } catch (e) { }
+  };
+
+  // Restore scroll position after page load
+  const restoreScrollPosition = (page) => {
+    const saved = scrollPositionsRef.current[page];
+    if (saved && iframeRef.current?.contentWindow) {
+      setTimeout(() => {
+        try { iframeRef.current.contentWindow.scrollTo(0, saved); } catch (e) { }
+      }, 100);
+    }
+  };
+
   const handleIframeLoad = () => {
+    setIframeLoading(false);
     applyZoom();
-    applyIframeTheme();
+    applyIframeTheme(activeLang);
+    restoreScrollPosition(currentPage);
     // Highlight search term if we navigated from a search result
     if (pendingHighlightRef.current && iframeRef.current?.contentWindow) {
       const term = pendingHighlightRef.current;
@@ -786,7 +826,7 @@ export default function Reader({ params, searchParams }) {
     document.addEventListener('touchend', onUp);
   };
 
-  const applyIframeTheme = () => {
+  const applyIframeTheme = (currentLang = activeLang) => {
     // Inject CSS to fix dark mode text contrast issues on legacy HTML
     if (iframeRef.current && iframeRef.current.contentWindow) {
       try {
@@ -824,6 +864,114 @@ export default function Reader({ params, searchParams }) {
           doc.body.style.backgroundColor = '';
           doc.body.style.color = '';
         }
+
+        // Inject readable typography for translated content
+        const isTranslated = currentLang && currentLang !== 'tr';
+        let readableStyle = doc.getElementById('readable-typography');
+        if (isTranslated) {
+          if (!readableStyle) {
+            readableStyle = doc.createElement('style');
+            readableStyle.id = 'readable-typography';
+            doc.head.appendChild(readableStyle);
+          }
+          readableStyle.innerHTML = `
+            body {
+              font-family: 'Georgia', 'Times New Roman', 'Noto Serif', serif !important;
+              line-height: 1.85 !important;
+              padding: 20px !important;
+              max-width: 720px !important;
+              margin: 0 auto !important;
+              font-size: 18px !important;
+              letter-spacing: 0.01em !important;
+              word-spacing: 0.05em !important;
+            }
+            p, div {
+              margin-bottom: 1em !important;
+              text-align: justify !important;
+              text-justify: inter-word !important;
+            }
+            h1, h2, h3, h4, h5, h6 {
+              font-family: 'Inter', -apple-system, 'Segoe UI', sans-serif !important;
+              line-height: 1.3 !important;
+              margin-top: 1.5em !important;
+              margin-bottom: 0.6em !important;
+              text-align: left !important;
+            }
+            h1 { font-size: 1.6em !important; }
+            h2 { font-size: 1.35em !important; }
+            h3 { font-size: 1.15em !important; }
+            blockquote {
+              border-left: 3px solid #6366f1 !important;
+              padding-left: 16px !important;
+              margin: 1.2em 0 !important;
+              font-style: italic !important;
+              opacity: 0.9;
+            }
+            ul, ol {
+              padding-left: 24px !important;
+              margin-bottom: 1em !important;
+            }
+            li {
+              margin-bottom: 0.4em !important;
+            }
+            img {
+              max-width: 100% !important;
+              height: auto !important;
+              border-radius: 6px;
+            }
+            .arabic-text {
+              font-family: 'Amiri', 'Traditional Arabic', 'Scheherazade New', 'Arabic Typesetting', serif !important;
+              font-size: 2em !important;
+              line-height: 1.6 !important;
+              direction: rtl;
+              display: inline-block;
+              margin: 0 4px;
+            }
+          `;
+
+          // Use a TreeWalker to safely find and wrap Arabic text in translation to make it 2x larger
+          try {
+            const walker = doc.createTreeWalker(doc.body, NodeFilter.SHOW_TEXT, null, false);
+            const nodesToReplace = [];
+            while (walker.nextNode()) {
+              const node = walker.currentNode;
+              const parent = node.parentElement;
+              if (!parent || parent.tagName === 'STYLE' || parent.tagName === 'SCRIPT' || parent.classList.contains('arabic-text')) {
+                continue;
+              }
+              if (/[\u0600-\u06FF]/.test(node.nodeValue)) {
+                nodesToReplace.push(node);
+              }
+            }
+
+            nodesToReplace.forEach(node => {
+              // Regex: 1+ Arabic chars, followed by 0+ groups of (spaces/punctuation + 1+ Arabic chars)
+              const arabicRegex = /([\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF\uFB50-\uFDFF\uFE70-\uFEFF]+(?:[ \t\n\r\.,،؛؟()«»"'-]+[\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF\uFB50-\uFDFF\uFE70-\uFEFF]+)*)/;
+              const parts = node.nodeValue.split(arabicRegex);
+              if (parts.length > 1) {
+                const fragment = doc.createDocumentFragment();
+                parts.forEach(part => {
+                  if (arabicRegex.test(part)) {
+                    const span = doc.createElement('span');
+                    span.className = 'arabic-text';
+                    span.dir = 'rtl';
+                    span.textContent = part;
+                    fragment.appendChild(span);
+                  } else if (part.length > 0) {
+                    fragment.appendChild(doc.createTextNode(part));
+                  }
+                });
+                if (node.parentNode) {
+                  node.parentNode.replaceChild(fragment, node);
+                }
+              }
+            });
+          } catch (err) {
+            console.error('Error scaling Arabic text:', err);
+          }
+        } else if (readableStyle) {
+          readableStyle.remove();
+        }
       } catch (e) { }
     }
   };
@@ -833,8 +981,8 @@ export default function Reader({ params, searchParams }) {
   }, [zoomLevel]);
 
   useEffect(() => {
-    applyIframeTheme();
-  }, [theme]);
+    applyIframeTheme(activeLang);
+  }, [theme, activeLang]);
 
   // If there's an active result search string, inject it into the iframe after load
   // (Optional feature, omitting for now to keep things stable)
@@ -842,6 +990,42 @@ export default function Reader({ params, searchParams }) {
   // Progress calculation
   const currentIndex = getCurrentIndex();
   const progressPercent = flattenedToc.length > 0 ? ((currentIndex + 1) / flattenedToc.length) * 100 : 0;
+
+  // Build breadcrumb from TOC hierarchy
+  const getBreadcrumb = () => {
+    if (!currentPage || !tocMap) return [];
+    const clean = currentPage.split('?')[0].split('#')[0];
+    for (const [local, name] of Object.entries(tocMap)) {
+      if (clean.endsWith('/' + local)) return [book.replace('.chm', ''), name];
+    }
+    return [book.replace('.chm', '')];
+  };
+  const breadcrumb = getBreadcrumb();
+
+  // Filter TOC nodes recursively
+  const filterTocNodes = (nodes, query) => {
+    if (!query.trim()) return nodes;
+    const q = query.toLowerCase();
+    return nodes.reduce((acc, node) => {
+      const nameMatch = node.name.toLowerCase().includes(q);
+      const filteredChildren = node.children ? filterTocNodes(node.children, query) : [];
+      if (nameMatch || filteredChildren.length > 0) {
+        acc.push({ ...node, children: filteredChildren });
+      }
+      return acc;
+    }, []);
+  };
+  const filteredToc = filterTocNodes(toc, tocFilter);
+
+  // Swipe hint (first visit only, defer to avoid hydration mismatch)
+  const [showSwipeHint, setShowSwipeHint] = useState(false);
+  useEffect(() => {
+    if (!localStorage.getItem('swipe_hint_seen')) setShowSwipeHint(true);
+  }, []);
+  const dismissSwipeHint = () => {
+    setShowSwipeHint(false);
+    localStorage.setItem('swipe_hint_seen', '1');
+  };
 
   return (
     <div className="reader-layout">
@@ -882,6 +1066,17 @@ export default function Reader({ params, searchParams }) {
 
           {sidebarTab === 'toc' ? (
             <>
+              {/* TOC Filter */}
+              <div className="toc-filter-wrap">
+                <input
+                  className="toc-filter-input"
+                  type="text"
+                  placeholder="Filter chapters..."
+                  value={tocFilter}
+                  onChange={e => setTocFilter(e.target.value)}
+                />
+                {tocFilter && <button className="toc-filter-clear" onClick={() => setTocFilter('')}>✕</button>}
+              </div>
               {loading ? (
                 <div className="loader-container-small">
                   <div className="loader small"></div>
@@ -890,12 +1085,12 @@ export default function Reader({ params, searchParams }) {
                 <div className="error-text">Failed to load content</div>
               ) : (
                 <ul className="toc-list root-list">
-                  {toc.map((item, index) => (
+                  {filteredToc.map((item, index) => (
                     <TocNode
                       key={index}
                       item={item}
                       cacheUrl={cacheUrl}
-                      setCurrentPage={setCurrentPage}
+                      setCurrentPage={(page) => { saveScrollPosition(); setIframeLoading(true); setCurrentPage(page); }}
                       currentPage={currentPage}
                       expandedPaths={expandedPaths}
                       onToggleExpand={onToggleExpand}
@@ -1085,12 +1280,12 @@ export default function Reader({ params, searchParams }) {
                   setCompareHtml(translationCacheRef.current[activeLang]);
                   if (originalHtmlRef.current && iframeRef.current?.contentWindow?.document?.body) {
                     iframeRef.current.contentWindow.document.body.innerHTML = originalHtmlRef.current;
-                    applyIframeTheme();
+                    applyIframeTheme('tr');
                   }
                 } else if (!next && activeLang !== 'tr' && translationCacheRef.current[activeLang]) {
                   if (iframeRef.current?.contentWindow?.document?.body) {
                     iframeRef.current.contentWindow.document.body.innerHTML = translationCacheRef.current[activeLang];
-                    applyIframeTheme();
+                    applyIframeTheme(activeLang);
                   }
                   setCompareHtml('');
                 }
@@ -1186,6 +1381,18 @@ export default function Reader({ params, searchParams }) {
           </div>
         </div>
 
+        {/* Breadcrumb */}
+        {breadcrumb.length > 0 && (
+          <div className="breadcrumb-bar">
+            {breadcrumb.map((seg, i) => (
+              <span key={i}>
+                {i > 0 && <span className="breadcrumb-sep">/</span>}
+                <span className={i === breadcrumb.length - 1 ? 'breadcrumb-current' : 'breadcrumb-parent'}>{seg}</span>
+              </span>
+            ))}
+          </div>
+        )}
+
         {loading ? (
           <div className="loader-container full-height">
             <div className="loader"></div>
@@ -1204,7 +1411,7 @@ export default function Reader({ params, searchParams }) {
               <iframe
                 ref={iframeRef}
                 src={currentPage}
-                className={`content-iframe ${theme === 'dark' ? 'dark-iframe-bg' : ''}`}
+                className={`content-iframe ${theme === 'dark' ? 'dark-iframe-bg' : ''} ${iframeLoading ? 'iframe-loading' : ''}`}
                 title="Book Content"
                 onLoad={handleIframeLoad}
                 sandbox="allow-same-origin allow-scripts allow-popups allow-forms"
@@ -1368,6 +1575,26 @@ export default function Reader({ params, searchParams }) {
               )}
             </div>
           </div>
+        </div>
+      )}
+
+      {/* Mobile Bottom Navigation */}
+      <div className="mobile-bottom-nav">
+        <button onClick={navigatePrev} disabled={getCurrentIndex() <= 0} title="Previous">◀</button>
+        <button onClick={navigateNext} disabled={getCurrentIndex() >= flattenedToc.length - 1} title="Next">▶</button>
+        <button onClick={() => handleTranslate(activeLang === 'tr' ? 'ru' : 'tr')} title="Toggle Translation">
+          {activeLang === 'tr' ? '🇷🇺' : '🇹🇷'}
+        </button>
+        <button onClick={toggleBookmark} title="Bookmark">{isBookmarked() ? '⭐' : '☆'}</button>
+        <button onClick={() => setTheme(t => t === 'dark' ? 'light' : 'dark')} title="Theme">
+          {theme === 'dark' ? '☀️' : '🌙'}
+        </button>
+      </div>
+
+      {/* First-visit swipe hint */}
+      {showSwipeHint && (
+        <div className="swipe-hint" onClick={dismissSwipeHint}>
+          <span>← Swipe to Navigate →</span>
         </div>
       )}
 
@@ -2705,6 +2932,149 @@ export default function Reader({ params, searchParams }) {
           .ai-controls {
             display: none;
           }
+        }
+
+        /* ─── Breadcrumb ─── */
+        .breadcrumb-bar {
+          padding: 6px 16px;
+          font-size: 0.78rem;
+          color: var(--text-muted);
+          background: var(--background);
+          border-bottom: 1px solid var(--card-border);
+          white-space: nowrap;
+          overflow: hidden;
+          text-overflow: ellipsis;
+        }
+        .breadcrumb-sep { margin: 0 6px; opacity: 0.5; }
+        .breadcrumb-current { color: var(--text-primary); font-weight: 600; }
+        .breadcrumb-parent { color: var(--text-muted); }
+
+        /* ─── TOC Filter ─── */
+        .toc-filter-wrap {
+          position: sticky;
+          top: 0;
+          z-index: 2;
+          padding: 8px 12px;
+          flex-shrink: 0;
+          background: var(--background);
+        }
+        .toc-filter-input {
+          width: 100%;
+          padding: 7px 30px 7px 10px;
+          border-radius: var(--radius-md);
+          border: 1px solid var(--card-border);
+          background: var(--background);
+          color: var(--text-primary);
+          font-size: 0.82rem;
+          outline: none;
+          transition: border-color 0.15s;
+        }
+        .toc-filter-input:focus {
+          border-color: var(--primary);
+        }
+        .toc-filter-input::placeholder {
+          color: var(--text-muted);
+        }
+        .toc-filter-clear {
+          position: absolute;
+          right: 18px;
+          top: 50%;
+          transform: translateY(-50%);
+          background: none;
+          border: none;
+          cursor: pointer;
+          color: var(--text-muted);
+          font-size: 0.9rem;
+          padding: 2px 4px;
+        }
+        .toc-filter-clear:hover { color: var(--text-primary); }
+
+        /* ─── Iframe Fade Transition ─── */
+        .content-iframe {
+          transition: opacity 0.2s ease;
+        }
+        .content-iframe.iframe-loading {
+          opacity: 0.3;
+          pointer-events: none;
+        }
+
+        /* ─── Mobile Bottom Nav ─── */
+        .mobile-bottom-nav {
+          display: none;
+        }
+
+        @media (max-width: 768px) {
+          .mobile-bottom-nav {
+            display: flex;
+            position: fixed;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            z-index: 1000;
+            background: var(--toolbar-bg);
+            backdrop-filter: blur(16px);
+            -webkit-backdrop-filter: blur(16px);
+            border-top: 1px solid var(--card-border);
+            padding: 6px 0;
+            padding-bottom: max(6px, env(safe-area-inset-bottom));
+            justify-content: space-around;
+            align-items: center;
+          }
+
+          .mobile-bottom-nav button {
+            background: none;
+            border: none;
+            color: var(--text-primary);
+            font-size: 1.2rem;
+            padding: 8px 14px;
+            cursor: pointer;
+            border-radius: var(--radius-md);
+            transition: background 0.15s;
+          }
+
+          .mobile-bottom-nav button:hover,
+          .mobile-bottom-nav button:active {
+            background: var(--card-hover);
+          }
+
+          .mobile-bottom-nav button:disabled {
+            opacity: 0.3;
+            pointer-events: none;
+          }
+
+          /* Add bottom padding to main content so it's not hidden behind bottom nav */
+          .main-content {
+            padding-bottom: 60px;
+          }
+        }
+
+        /* ─── Swipe Hint ─── */
+        .swipe-hint {
+          display: none;
+        }
+
+        @media (max-width: 768px) {
+          .swipe-hint {
+            display: flex;
+            position: fixed;
+            bottom: 70px;
+            left: 50%;
+            transform: translateX(-50%);
+            z-index: 999;
+            background: rgba(0,0,0,0.75);
+            color: #fff;
+            padding: 10px 24px;
+            border-radius: 24px;
+            font-size: 0.85rem;
+            cursor: pointer;
+            animation: swipeHintFade 4s ease forwards;
+            pointer-events: auto;
+          }
+        }
+
+        @keyframes swipeHintFade {
+          0%, 70% { opacity: 1; }
+          100% { opacity: 0; pointer-events: none; }
         }
       `}</style>
     </div>

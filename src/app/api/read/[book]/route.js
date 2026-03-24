@@ -10,5 +10,7 @@ export async function GET(request, { params }) {
     return NextResponse.json({
         success: true,
         cacheUrl: `/cache/${bookName}`
+    }, {
+        headers: { 'Cache-Control': 'public, max-age=86400, s-maxage=86400' }
     });
 }

@@ -23,7 +23,9 @@ export async function GET(request, { params }) {
     try {
         const hhcPath = path.join(cacheDir, hhcFile);
         const toc = parseHHC(hhcPath);
-        return NextResponse.json({ toc });
+        return NextResponse.json({ toc }, {
+            headers: { 'Cache-Control': 'public, max-age=86400, s-maxage=86400' }
+        });
     } catch (error) {
         console.error("Error parsing TOC:", error);
         return NextResponse.json({ error: 'Failed to parse TOC' }, { status: 500 });

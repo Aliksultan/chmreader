@@ -5,6 +5,19 @@ const MAX_OUTPUT_TOKENS = 16384;
 const PRIMARY_MODEL = 'gemini-3-flash-preview';
 const FALLBACK_MODEL = 'gemini-3.1-flash-lite-preview';
 
+// Rate limiting: 10 translate requests per minute per IP
+const rateLimitMap = new Map();
+function isRateLimited(ip) {
+    const now = Date.now();
+    const entry = rateLimitMap.get(ip);
+    if (!entry || now - entry.start > 60000) {
+        rateLimitMap.set(ip, { start: now, count: 1 });
+        return false;
+    }
+    entry.count++;
+    return entry.count > 10;
+}
+
 // Optional Upstash/Vercel Redis - gracefully skip if not configured
 let redis = null;
 try {
@@ -14,10 +27,12 @@ try {
     if (url && token) {
         const { Redis } = await import('@upstash/redis');
         redis = new Redis({ url, token });
-        console.log('✅ Redis Cache Initialized:', url.includes('upstash') ? 'Upstash' : 'Vercel KV');
+        console.log('✅ Translate API — Redis connected:', url.includes('upstash') ? 'Upstash' : 'Vercel KV');
+    } else {
+        console.warn('⚠️ Translate API — No Redis credentials. Translations will not be cached. Set UPSTASH_REDIS_REST_URL + TOKEN or KV_REST_API_URL + TOKEN.');
     }
 } catch (e) {
-    console.error('Redis initialization failed:', e.message);
+    console.error('❌ Redis initialization failed:', e.message);
 }
 
 async function getFromKV(key) {
@@ -59,6 +74,12 @@ IMPORTANT FORMATTING RULES:
 - Do NOT add any notes, commentary, or translator remarks
 - ONLY output the translated HTML, nothing else
 
+SPIRITUAL & CONTEXTUAL TRANSLATION GUIDELINES:
+1. Core Meaning over Literal Translation: Do not translate word-for-word. Convey the deep meaning, spirit, and light of the sentence. Use the "mana-i harfī" (contextual/spiritual meaning) principle rather than "mana-i ismī" (literal/isolated meaning). Ask yourself: "How would a native speaker express this profound thought naturally?"
+2. Cultural & Linguistic Nuance: Do not be bound by the original syntax. Use natural idioms, proverbs, and culturally appropriate expressions in ${langName} to convey the core intent and spiritual flavor. The text should feel natural, luminous, and impactful, not dry or mechanical.
+3. Handling Arabic / Spiritual Terms (Dhikr, Duas): Preserve original Arabic terms, prayers, and dhikr where appropriate to maintain the spiritual rhythm. If kept in Arabic, provide a brief, natural in-line explanation or translation in parentheses contextually.
+4. Faithfulness & Tone: Stay true to the author's profound purpose without adding personal opinions or distorting the intent. Maintain the eloquent, literary, and emotional weight of the original text.
+
 TEXT TO TRANSLATE:
 ${text}`
             }]
@@ -85,7 +106,7 @@ ${text}`
     let result = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
 
     // Clean up markdown code fences if Gemini wraps HTML in them
-    result = result.replace(/^```html?\s*\n?/i, '').replace(/\n?```\s*$/i, '').trim();
+    result = result.replace(/^```html ?\s *\n ? /i, '').replace(/\n ? ```\s*$/i, '').trim();
 
     return result;
 }
@@ -132,6 +153,11 @@ function splitIntoChunks(text, maxChunkSize) {
 
 export async function POST(request) {
     try {
+        const ip = request.headers.get('x-forwarded-for') || request.headers.get('x-real-ip') || 'unknown';
+        if (isRateLimited(ip)) {
+            return NextResponse.json({ error: 'Rate limit exceeded' }, { status: 429 });
+        }
+
         const { text, targetLang, apiKey, pageKey } = await request.json();
 
         if (!text || !targetLang) {
@@ -146,7 +172,7 @@ export async function POST(request) {
         const langName = langNames[targetLang] || targetLang;
 
         // 1) Check Redis cache FIRST — no API key needed for cached translations
-        const kvKey = pageKey ? `tr:${pageKey}:${targetLang}` : null;
+        const kvKey = pageKey ? `tr: ${pageKey}: ${targetLang}` : null;
         if (kvKey) {
             const cached = await getFromKV(kvKey);
             if (cached) {

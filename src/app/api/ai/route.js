@@ -83,10 +83,25 @@ try {
     if (url && token) {
         const { Redis } = await import('@upstash/redis');
         redis = new Redis({ url, token });
-        console.log('✅ Redis AI Cache Initialized:', url.includes('upstash') ? 'Upstash' : 'Vercel KV');
+        console.log('✅ AI API — Redis connected:', url.includes('upstash') ? 'Upstash' : 'Vercel KV');
+    } else {
+        console.warn('⚠️ AI API — No Redis credentials. AI responses will not be cached.');
     }
 } catch (e) {
-    console.error('Redis init failed:', e.message);
+    console.error('❌ Redis init failed:', e.message);
+}
+
+// Rate limiting: 10 AI requests per minute per IP
+const rateLimitMap = new Map();
+function isRateLimited(ip) {
+    const now = Date.now();
+    const entry = rateLimitMap.get(ip);
+    if (!entry || now - entry.start > 60000) {
+        rateLimitMap.set(ip, { start: now, count: 1 });
+        return false;
+    }
+    entry.count++;
+    return entry.count > 10;
 }
 
 async function getFromKV(key) {
@@ -101,6 +116,11 @@ async function saveToKV(key, value) {
 
 export async function POST(request) {
     try {
+        const ip = request.headers.get('x-forwarded-for') || request.headers.get('x-real-ip') || 'unknown';
+        if (isRateLimited(ip)) {
+            return NextResponse.json({ error: 'Rate limit exceeded' }, { status: 429 });
+        }
+
         const { text, mode, lang, apiKey, pageKey } = await request.json();
 
         if (!text || !mode || !apiKey) {
