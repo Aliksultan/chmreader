@@ -9,13 +9,19 @@
     "lint": "eslint"
   },
   "dependencies": {
+    "@ai-sdk/google": "^3.0.53",
+    "@ai-sdk/react": "^3.0.139",
     "@upstash/redis": "^1.36.3",
+    "ai": "^6.0.137",
     "iconv-lite": "^0.7.2",
     "jschardet": "^3.1.4",
     "next": "16.1.6",
     "react": "19.2.3",
     "react-dom": "19.2.3",
-    "sanitize-html": "^2.17.2"
+    "react-markdown": "^10.1.0",
+    "remark-gfm": "^4.0.1",
+    "sanitize-html": "^2.17.2",
+    "zod": "^4.3.6"
   },
   "devDependencies": {
     "eslint": "^9",

@@ -2,6 +2,7 @@
 
 import { useEffect, useState, use, useRef, useCallback } from 'react';
 import Link from 'next/link';
+import AiStudyHub from '../../components/AiStudyHub';
 
 function TocNode({ item, cacheUrl, setCurrentPage, currentPage, level = 0, expandedPaths, onToggleExpand, nodePath }) {
   const hasChildren = item.children && item.children.length > 0;
@@ -993,11 +994,39 @@ export default function Reader({ params, searchParams }) {
 
   // Build breadcrumb from TOC hierarchy
   const getBreadcrumb = () => {
-    if (!currentPage || !tocMap) return [];
+    if (!currentPage || !toc) return [book.replace('.chm', '')];
+
     const clean = currentPage.split('?')[0].split('#')[0];
-    for (const [local, name] of Object.entries(tocMap)) {
-      if (clean.endsWith('/' + local)) return [book.replace('.chm', ''), name];
+
+    const findPath = (nodes, currentPath) => {
+      for (const node of nodes) {
+        const pathObj = [...currentPath, node.name];
+        if (node.local && clean.endsWith('/' + node.local)) {
+          return pathObj;
+        }
+        if (node.children && node.children.length > 0) {
+          const found = findPath(node.children, pathObj);
+          if (found) return found;
+        }
+      }
+      return null;
+    };
+
+    const foundPath = findPath(toc, []);
+
+    if (foundPath) {
+      if (foundPath[0] === book.replace('.chm', '')) {
+        return foundPath;
+      }
+      return [book.replace('.chm', ''), ...foundPath];
     }
+
+    if (tocMap) {
+      for (const [local, name] of Object.entries(tocMap)) {
+        if (clean.endsWith('/' + local)) return [book.replace('.chm', ''), name];
+      }
+    }
+
     return [book.replace('.chm', '')];
   };
   const breadcrumb = getBreadcrumb();
@@ -1329,19 +1358,10 @@ export default function Reader({ params, searchParams }) {
             <div className="ai-controls">
               <button
                 className="icon-button ai-btn"
-                onClick={() => handleAi('summarize')}
-                disabled={isAiLoading}
-                title="Summarize Page"
+                onClick={() => setShowAiPanel(true)}
+                title="Open AI Study Hub"
               >
-                {isAiLoading && aiMode === 'summarize' ? '⏳' : '📝'}
-              </button>
-              <button
-                className="icon-button ai-btn"
-                onClick={() => handleAi('explain')}
-                disabled={isAiLoading}
-                title="Explain Passages"
-              >
-                {isAiLoading && aiMode === 'explain' ? '⏳' : '💡'}
+                🧠 <span className="tooltip">AI Hub</span>
               </button>
             </div>
 
@@ -1473,27 +1493,26 @@ export default function Reader({ params, searchParams }) {
         )}
       </main>
 
-      {/* AI Results Modal */}
-      {showAiPanel && (
-        <div className="search-modal-overlay" onClick={(e) => { if (e.target === e.currentTarget) setShowAiPanel(false); }}>
-          <div className="ai-modal">
-            <div className="ai-modal-header">
-              <h2>{aiMode === 'summarize' ? '📝 Summary' : '💡 Explanation'}</h2>
-              <button className="icon-button" onClick={() => setShowAiPanel(false)}>✕</button>
-            </div>
-            <div className="ai-modal-body">
-              {isAiLoading ? (
-                <div className="ai-loading-state">
-                  <div className="loader"></div>
-                  <p>{aiMode === 'summarize' ? 'Summarizing the text...' : 'Analyzing passages...'}</p>
-                </div>
-              ) : (
-                <div className="ai-result-content" dangerouslySetInnerHTML={{ __html: aiResult }} />
-              )}
-            </div>
-          </div>
-        </div>
-      )}
+      {/* AI Study Hub Modal */}
+      <AiStudyHub
+        isOpen={showAiPanel}
+        onClose={() => setShowAiPanel(false)}
+        book={book.replace('.chm', '')}
+        chapter={breadcrumb.length > 0 ? breadcrumb[breadcrumb.length - 1] : ''}
+        pageKey={(currentPage || '').replace(/^.*\/cache\//, '').replace(/[^a-zA-Z0-9]/g, '_')}
+        contentHtml={(() => {
+          if (!iframeRef?.current?.contentWindow?.document?.body) return '';
+          return originalHtmlRef.current
+            ? (() => { const temp = document.createElement('div'); temp.innerHTML = originalHtmlRef.current; return temp.innerText; })()
+            : iframeRef.current.contentWindow.document.body.innerText || '';
+        })()}
+        targetLang={activeLang}
+        apiKey={geminiApiKey}
+        onRequireApiKey={() => {
+          setShowAiPanel(false);
+          setShowApiKeyInput(true);
+        }}
+      />
 
       {/* API Key Modal */}
       {showApiKeyInput && (
@@ -1520,10 +1539,6 @@ export default function Reader({ params, searchParams }) {
                   if (pendingLang) {
                     handleTranslate(pendingLang);
                     setPendingLang(null);
-                  }
-                  if (pendingAiMode) {
-                    handleAi(pendingAiMode);
-                    setPendingAiMode(null);
                   }
                 }}
                 disabled={!geminiApiKey.trim()}
