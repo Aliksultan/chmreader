@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -7,12 +7,16 @@ export default function AiSummaryTab({ contentHtml, pageKey, targetLang, apiKey,
     const [summary, setSummary] = useState('');
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState('');
+    const fetchedRef = useRef(false);
 
     useEffect(() => {
         if (!apiKey) {
             onRequireApiKey();
             return;
         }
+
+        if (fetchedRef.current) return;
+        fetchedRef.current = true;
 
         async function fetchSummary() {
             try {

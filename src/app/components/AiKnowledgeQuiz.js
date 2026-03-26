@@ -1,16 +1,20 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 
 export default function AiKnowledgeQuiz({ contentHtml, pageKey, targetLang, apiKey, onRequireApiKey }) {
     const [quizData, setQuizData] = useState(null);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState('');
     const [answers, setAnswers] = useState({}); // { qIndex: selectedOptionIndex }
+    const fetchedRef = useRef(false);
 
     useEffect(() => {
         if (!apiKey) {
             onRequireApiKey();
             return;
         }
+
+        if (fetchedRef.current) return;
+        fetchedRef.current = true;
 
         async function fetchQuiz() {
             try {

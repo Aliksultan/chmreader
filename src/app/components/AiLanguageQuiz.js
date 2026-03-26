@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 
 export default function AiLanguageQuiz({ contentHtml, pageKey, targetLang, apiKey, onRequireApiKey }) {
     const [quizData, setQuizData] = useState(null);
@@ -9,12 +9,16 @@ export default function AiLanguageQuiz({ contentHtml, pageKey, targetLang, apiKe
     const [openInputs, setOpenInputs] = useState({}); // { qIndex: string }
     const [openResults, setOpenResults] = useState(null); // API grade results
     const [grading, setGrading] = useState(false);
+    const fetchedRef = useRef(false);
 
     useEffect(() => {
         if (!apiKey) {
             onRequireApiKey();
             return;
         }
+
+        if (fetchedRef.current) return;
+        fetchedRef.current = true;
 
         async function fetchQuiz() {
             try {

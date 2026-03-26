@@ -140,6 +140,11 @@ export default function Reader({ params, searchParams }) {
   // Sidebar tab
   const [sidebarTab, setSidebarTab] = useState('toc'); // 'toc' | 'bookmarks'
 
+  // Premium Mobile UI State
+  const [isMobileSettingsOpen, setIsMobileSettingsOpen] = useState(false);
+  const [isMobileSearchActive, setIsMobileSearchActive] = useState(false);
+  const [isNavVisible, setIsNavVisible] = useState(true);
+
   // Load saved API key, bookmarks, and persist zoom
   useEffect(() => {
     const savedKey = localStorage.getItem('gemini_api_key');
@@ -776,6 +781,33 @@ export default function Reader({ params, searchParams }) {
         }, 7000);
       } catch (e) { console.warn('Highlight injection failed', e); }
     }
+
+    // Auto-hide navigation on scroll and toggle on tap
+    try {
+      if (iframeRef.current && iframeRef.current.contentWindow) {
+        const win = iframeRef.current.contentWindow;
+        const doc = win.document;
+        let lastScrollY = win.scrollY || doc.documentElement.scrollTop;
+        
+        win.addEventListener('scroll', () => {
+          const currentScrollY = win.scrollY || doc.documentElement.scrollTop;
+          if (currentScrollY > lastScrollY + 30) {
+            setIsNavVisible(false);
+            lastScrollY = currentScrollY;
+          } else if (currentScrollY < lastScrollY - 30 || currentScrollY <= 10) {
+            setIsNavVisible(true);
+            lastScrollY = currentScrollY;
+          }
+        }, { passive: true });
+
+        // Tapping the text toggles the UI bars
+        doc.body.addEventListener('click', (e) => {
+          if (e.target.tagName !== 'A' && e.target.tagName !== 'BUTTON') {
+            setIsNavVisible(v => !v);
+          }
+        }, { passive: true });
+      }
+    } catch (e) { console.warn('Scroll injection failed', e); }
   };
 
   const applyZoom = () => {
@@ -865,6 +897,32 @@ export default function Reader({ params, searchParams }) {
           doc.body.style.backgroundColor = '';
           doc.body.style.color = '';
         }
+
+        let responsiveStyle = doc.getElementById('responsive-override');
+        if (!responsiveStyle) {
+          responsiveStyle = doc.createElement('style');
+          responsiveStyle.id = 'responsive-override';
+          doc.head.appendChild(responsiveStyle);
+        }
+        
+        // Use the parent window width to determine if we need mobile padding blockouts
+        const isMobileView = window.innerWidth <= 1024;
+        
+        // Apply comfortable reading layout to ALL pages, native or translated
+        responsiveStyle.innerHTML = `
+          body {
+            max-width: 800px !important;
+            margin: 0 auto !important;
+            padding: ${isMobileView ? '80px 24px 100px 24px' : '30px 40px'} !important;
+            font-size: 115% !important;
+            line-height: 1.6 !important;
+          }
+          img {
+            max-width: 100% !important;
+            height: auto !important;
+            border-radius: 8px;
+          }
+        `;
 
         // Inject readable typography for translated content
         const isTranslated = currentLang && currentLang !== 'tr';
@@ -1056,6 +1114,24 @@ export default function Reader({ params, searchParams }) {
     localStorage.setItem('swipe_hint_seen', '1');
   };
 
+  const toggleCompareMode = () => {
+    const next = !compareMode;
+    setCompareMode(next);
+    if (next && activeLang !== 'tr' && translationCacheRef.current[activeLang]) {
+      setCompareHtml(translationCacheRef.current[activeLang]);
+      if (originalHtmlRef.current && iframeRef.current?.contentWindow?.document?.body) {
+        iframeRef.current.contentWindow.document.body.innerHTML = originalHtmlRef.current;
+        applyIframeTheme('tr');
+      }
+    } else if (!next && activeLang !== 'tr' && translationCacheRef.current[activeLang]) {
+      if (iframeRef.current?.contentWindow?.document?.body) {
+        iframeRef.current.contentWindow.document.body.innerHTML = translationCacheRef.current[activeLang];
+        applyIframeTheme(activeLang);
+      }
+      setCompareHtml('');
+    }
+  };
+
   return (
     <div className="reader-layout">
       {/* Reading Progress Bar */}
@@ -1073,11 +1149,11 @@ export default function Reader({ params, searchParams }) {
             <span>Library</span>
           </Link>
           <button
-            className="icon-button"
+            className="icon-button close-sidebar-btn"
             onClick={() => setSidebarOpen(false)}
             title="Close Sidebar"
           >
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="15 18 9 12 15 6"></polyline></svg>
+            ✕
           </button>
         </div>
 
@@ -1119,7 +1195,7 @@ export default function Reader({ params, searchParams }) {
                       key={index}
                       item={item}
                       cacheUrl={cacheUrl}
-                      setCurrentPage={(page) => { saveScrollPosition(); setIframeLoading(true); setCurrentPage(page); }}
+                      setCurrentPage={(page) => { saveScrollPosition(); setIframeLoading(true); setCurrentPage(page); setSidebarOpen(false); }}
                       currentPage={currentPage}
                       expandedPaths={expandedPaths}
                       onToggleExpand={onToggleExpand}
@@ -1166,17 +1242,18 @@ export default function Reader({ params, searchParams }) {
       {/* Main Content Area */}
       <main className="main-content">
         {/* Top Toolbar */}
-        <div className="reader-toolbar glass-panel">
+        <div className="reader-toolbar glass-panel desktop-only-toolbar">
           <div className="toolbar-left">
             {!sidebarOpen && (
               <button
-                className="icon-button primary"
+                className="icon-button primary sidebar-toggle"
                 onClick={() => setSidebarOpen(true)}
                 title="Open Sidebar"
               >
                 <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="3" y1="12" x2="21" y2="12"></line><line x1="3" y1="6" x2="21" y2="6"></line><line x1="3" y1="18" x2="21" y2="18"></line></svg>
               </button>
             )}
+            <div className="mobile-header-title">{book.replace('.chm', '')}</div>
 
             <div className="search-container">
               <div className="local-search-form">
@@ -1300,30 +1377,14 @@ export default function Reader({ params, searchParams }) {
               {isBookmarked() ? '⭐' : '☆'}
             </button>
 
-            <button
-              className={`icon-button ${compareMode ? 'primary' : ''}`}
-              onClick={() => {
-                const next = !compareMode;
-                setCompareMode(next);
-                if (next && activeLang !== 'tr' && translationCacheRef.current[activeLang]) {
-                  setCompareHtml(translationCacheRef.current[activeLang]);
-                  if (originalHtmlRef.current && iframeRef.current?.contentWindow?.document?.body) {
-                    iframeRef.current.contentWindow.document.body.innerHTML = originalHtmlRef.current;
-                    applyIframeTheme('tr');
-                  }
-                } else if (!next && activeLang !== 'tr' && translationCacheRef.current[activeLang]) {
-                  if (iframeRef.current?.contentWindow?.document?.body) {
-                    iframeRef.current.contentWindow.document.body.innerHTML = translationCacheRef.current[activeLang];
-                    applyIframeTheme(activeLang);
-                  }
-                  setCompareHtml('');
-                }
-              }}
-              disabled={activeLang === 'tr'}
-              title="Compare Side-by-Side"
-            >
-              ⚖️
-            </button>
+              <button
+                className={`icon-button ${compareMode ? 'primary' : ''}`}
+                onClick={toggleCompareMode}
+                disabled={activeLang === 'tr'}
+                title="Compare Side-by-Side"
+              >
+                ⚖️
+              </button>
 
             {/* Edit / Save / Cancel */}
             {!isEditing ? (
@@ -1401,9 +1462,57 @@ export default function Reader({ params, searchParams }) {
           </div>
         </div>
 
-        {/* Breadcrumb */}
+        {/* PREMIUM MOBILE UI - TOP BAR */}
+        <div className={`mobile-premium-top-bar glass-panel mobile-only ${!isNavVisible ? 'nav-hidden-top' : ''}`}>
+          {!isEditing ? (
+            isMobileSearchActive ? (
+              <div style={{ display: 'flex', alignItems: 'center', width: '100%', gap: '8px' }}>
+                <input
+                  autoFocus
+                  type="text"
+                  placeholder="Search in book..."
+                  className="toolbar-input"
+                  style={{ background: 'var(--card-bg)', border: '1px solid var(--card-border)', borderRadius: '16px', padding: '6px 12px' }}
+                  value={searchQuery}
+                  onChange={e => {
+                    setSearchQuery(e.target.value);
+                    if (e.target.value.trim().length >= 3) {
+                      setIsSearchModalOpen(true);
+                    }
+                  }}
+                />
+                <button className="icon-button" onClick={() => { setIsMobileSearchActive(false); setSearchQuery(''); setIsSearchModalOpen(false); }}>✕</button>
+              </div>
+            ) : (
+              <>
+                <button className="icon-button" onClick={() => setSidebarOpen(true)}>
+                  <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="3" y1="12" x2="21" y2="12"></line><line x1="3" y1="6" x2="21" y2="6"></line><line x1="3" y1="18" x2="21" y2="18"></line></svg>
+                </button>
+                <div className="mobile-title truncate">{book.replace('.chm', '')}</div>
+                <button className="icon-button" onClick={() => setIsMobileSearchActive(true)}>
+                  <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+                </button>
+                <button className={`icon-button ${isBookmarked() ? 'primary bookmark-active' : ''}`} onClick={toggleBookmark}>
+                  {isBookmarked() ? '⭐' : '☆'}
+                </button>
+              </>
+            )
+          ) : (
+            <>
+              <div className="mobile-title truncate" style={{color: 'var(--primary)', textAlign: 'left', paddingLeft: '4px'}}>✏️ Editing...</div>
+              <div style={{display: 'flex', gap: '8px'}}>
+                <button className="icon-button" onClick={cancelEditing} title="Cancel">❌</button>
+                <button className="icon-button primary" onClick={saveTranslation} disabled={isSaving} title="Save">
+                  {isSaving ? '⏳' : '💾 Save'}
+                </button>
+              </div>
+            </>
+          )}
+        </div>
+
+        {/* Breadcrumb (Desktop Only) */}
         {breadcrumb.length > 0 && (
-          <div className="breadcrumb-bar">
+          <div className="breadcrumb-bar desktop-only">
             {breadcrumb.map((seg, i) => (
               <span key={i}>
                 {i > 0 && <span className="breadcrumb-sep">/</span>}
@@ -1594,17 +1703,69 @@ export default function Reader({ params, searchParams }) {
       )}
 
       {/* Mobile Bottom Navigation */}
-      <div className="mobile-bottom-nav">
-        <button onClick={navigatePrev} disabled={getCurrentIndex() <= 0} title="Previous">◀</button>
-        <button onClick={navigateNext} disabled={getCurrentIndex() >= flattenedToc.length - 1} title="Next">▶</button>
-        <button onClick={() => handleTranslate(activeLang === 'tr' ? 'ru' : 'tr')} title="Toggle Translation">
-          {activeLang === 'tr' ? '🇷🇺' : '🇹🇷'}
+      {/* PREMIUM MOBILE UI - BOTTOM BAR */}
+      <div className={`mobile-bottom-nav glass-panel-bottom mobile-only ${!isNavVisible ? 'nav-hidden-bottom' : ''}`}>
+        <button className="nav-action-btn" onClick={navigatePrev} disabled={getCurrentIndex() <= 0}>
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="15 18 9 12 15 6"></polyline></svg>
+          <span>Prev</span>
         </button>
-        <button onClick={toggleBookmark} title="Bookmark">{isBookmarked() ? '⭐' : '☆'}</button>
-        <button onClick={() => setTheme(t => t === 'dark' ? 'light' : 'dark')} title="Theme">
-          {theme === 'dark' ? '☀️' : '🌙'}
+        <button className="nav-action-btn" onClick={() => setIsMobileSettingsOpen(true)}>
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
+          <span>Tools</span>
+        </button>
+        <div className="bottom-nav-center-wrap">
+          <button className="nav-action-btn center-primary-btn" onClick={() => setShowAiPanel(true)}>
+            <span className="ai-icon-large">🧠</span>
+          </button>
+        </div>
+        <button className="nav-action-btn" onClick={navigateNext} disabled={getCurrentIndex() >= flattenedToc.length - 1}>
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="9 18 15 12 9 6"></polyline></svg>
+          <span>Next</span>
         </button>
       </div>
+
+      {/* PREMIUM MOBILE UI - SETTINGS SHEET */}
+      {isMobileSettingsOpen && (
+        <div className="search-modal-overlay mobile-only" style={{zIndex: 10001}} onClick={(e) => { if (e.target === e.currentTarget) setIsMobileSettingsOpen(false); }}>
+          <div className="mobile-settings-sheet sheet-open">
+             <div className="sheet-handle"></div>
+             <div className="sheet-header">
+               <h3 className="sheet-title">Display & Tools</h3>
+               <button className="icon-button" onClick={() => setIsMobileSettingsOpen(false)}>✕</button>
+             </div>
+             
+             <div className="sheet-section">
+               <div className="sheet-row">
+                 <button className="sheet-btn" onClick={() => setZoomLevel(z => Math.max(50, z - 10))}>A-</button>
+                 <span className="sheet-val">{zoomLevel}%</span>
+                 <button className="sheet-btn" onClick={() => setZoomLevel(z => Math.min(200, z + 10))}>A+</button>
+               </div>
+               <div className="sheet-row theme-toggles">
+                 <button className={`sheet-btn ${theme === 'light' ? 'active' : ''}`} onClick={() => setTheme('light')}>☀️ Light</button>
+                 <button className={`sheet-btn ${theme === 'dark' ? 'active' : ''}`} onClick={() => setTheme('dark')}>🌙 Dark</button>
+                 <button className={`sheet-btn ${theme === 'system' ? 'active' : ''}`} onClick={() => setTheme('system')}>💻 Auto</button>
+               </div>
+             </div>
+
+             <div className="sheet-section">
+               <h4 className="sheet-subtitle">Language & Translation</h4>
+               <div className="sheet-row">
+                 <button className={`sheet-btn ${activeLang === 'tr' ? 'active' : ''}`} onClick={() => handleTranslate('tr')}>🇹🇷 TR</button>
+                 <button className={`sheet-btn ${activeLang === 'ru' ? 'active' : ''}`} onClick={() => handleTranslate('ru')}>🇷🇺 RU</button>
+                 <button className={`sheet-btn ${activeLang === 'kk' ? 'active' : ''}`} onClick={() => handleTranslate('kk')}>🇰🇿 KZ</button>
+               </div>
+               <div className="sheet-row">
+                 <button className={`sheet-btn ${compareMode ? 'active' : ''}`} onClick={toggleCompareMode}>⚖️ Compare</button>
+                 <button className={`sheet-btn ${isEditing ? 'active' : ''}`} onClick={() => { setIsMobileSettingsOpen(false); startEditing(); }}>✏️ Edit</button>
+               </div>
+             </div>
+             
+             <div className="sheet-section">
+                <button className="sheet-btn full-width" onClick={() => { setIsMobileSettingsOpen(false); handleRandomSection(); }}>🎲 Random Section</button>
+             </div>
+          </div>
+        </div>
+      )}
 
       {/* First-visit swipe hint */}
       {showSwipeHint && (
@@ -2802,79 +2963,304 @@ export default function Reader({ params, searchParams }) {
           margin: 0.3rem 0;
         }
 
-        /* Mobile Responsive */
-        @media (max-width: 768px) {
+        .mobile-header-title {
+          display: none;
+        }
+
+        .desktop-only {
+          display: flex;
+        }
+
+        /* Premium Mobile Responsive UI */
+        .mobile-only {
+          display: none;
+        }
+
+        @media (max-width: 1024px) {
+          .desktop-only, .desktop-only-toolbar {
+            display: none !important;
+          }
+
+          .mobile-only {
+            display: flex;
+          }
+
           .sidebar {
             width: 100%;
             position: absolute;
             height: 100%;
+            z-index: 1005; /* Must sit above top and bottom navs (1000) */
+          }
+
+          .sidebar-content {
+            padding-bottom: 90px;
           }
 
           .sidebar-header {
             height: 52px;
           }
 
-          .reader-toolbar {
-            height: auto;
-            min-height: 48px;
-            padding: 0.4rem 0.6rem;
-            flex-wrap: wrap;
-            gap: 0.35rem;
+          .main-content {
+            padding-top: 0 !important;
+            padding-bottom: 0 !important;
           }
 
-          .toolbar-left, .toolbar-right {
-            gap: 0.3rem;
+          /* Auto-hiding transitions for full screen reading */
+          .nav-hidden-top {
+            transform: translateY(-110%);
+          }
+          .nav-hidden-bottom {
+            transform: translateY(110%);
           }
 
-          .toolbar-right {
-            flex-wrap: wrap;
-            justify-content: flex-end;
+          /* Top Bar */
+          .mobile-premium-top-bar {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 60px;
+            z-index: 1000;
+            padding: 0 16px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            background: var(--toolbar-bg);
+            backdrop-filter: blur(20px) saturate(180%);
+            -webkit-backdrop-filter: blur(20px) saturate(180%);
+            border-bottom: 1px solid var(--card-border);
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.05);
+            transition: transform 0.3s cubic-bezier(0.3, 0, 0, 1);
           }
 
-          .local-search-form {
-            width: 160px;
+          .mobile-title {
+            font-size: 1.1rem;
+            font-weight: 700;
+            color: var(--text-primary);
+            flex: 1;
+            text-align: center;
+            padding: 0 12px;
           }
 
-          .icon-button {
+          /* Bottom Nav */
+          .mobile-bottom-nav {
+            position: fixed;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            z-index: 1000;
+            background: var(--toolbar-bg);
+            backdrop-filter: blur(20px) saturate(180%);
+            -webkit-backdrop-filter: blur(20px) saturate(180%);
+            border-top: 1px solid var(--card-border);
+            padding: 8px 16px;
+            padding-bottom: max(12px, calc(8px + env(safe-area-inset-bottom)));
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-end;
+            box-shadow: 0 -4px 20px rgba(0, 0, 0, 0.05);
+            transition: transform 0.3s cubic-bezier(0.3, 0, 0, 1);
+          }
+
+          .nav-action-btn {
+            background: transparent;
+            border: none;
+            color: var(--text-muted);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            gap: 4px;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            min-width: 60px;
+          }
+
+          .nav-action-btn:hover, .nav-action-btn:active, .nav-action-btn.active {
+            color: var(--primary);
+          }
+
+          .nav-action-btn span {
+            font-size: 0.65rem;
+            font-weight: 600;
+            letter-spacing: 0.02em;
+          }
+
+          .bottom-nav-center-wrap {
+            position: relative;
+            display: flex;
+            justify-content: center;
+            width: 70px;
+          }
+
+          .center-primary-btn {
+            position: absolute;
+            bottom: 4px;
+            width: 56px;
+            height: 56px;
+            background: linear-gradient(135deg, var(--primary), var(--secondary));
+            border-radius: 50%;
+            color: white;
+            box-shadow: 0 4px 16px rgba(79, 70, 229, 0.4);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 2;
+          }
+
+          .center-primary-btn .ai-icon-large {
+            font-size: 1.6rem;
+          }
+
+          /* Settings Sheet */
+          .mobile-settings-sheet {
+            position: absolute;
+            bottom: 0;
+            left: 0;
+            width: 100%;
+            background: var(--toolbar-bg);
+            backdrop-filter: blur(25px) saturate(200%);
+            -webkit-backdrop-filter: blur(25px) saturate(200%);
+            border-radius: 24px 24px 0 0;
+            padding: 24px 20px;
+            padding-bottom: max(24px, env(safe-area-inset-bottom));
+            box-shadow: 0 -10px 40px rgba(0,0,0,0.25);
+            animation: sheetSlideUp 0.4s cubic-bezier(0.16, 1, 0.3, 1);
+            display: flex;
+            flex-direction: column;
+            gap: 1.5rem;
+            border-top: 1px solid var(--card-border);
+          }
+
+          @keyframes sheetSlideUp {
+            from { transform: translateY(100%); }
+            to { transform: translateY(0); }
+          }
+
+          .sheet-handle {
+            width: 48px;
+            height: 6px;
+            background: var(--text-muted);
+            opacity: 0.4;
+            border-radius: 99px;
+            margin: -10px auto 10px auto;
+          }
+
+          .sheet-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+          }
+
+          .sheet-header .icon-button {
+            background: rgba(128, 128, 128, 0.15);
+            border-radius: 50%;
             width: 36px;
             height: 36px;
-            min-width: 36px;
-            font-size: 0.85rem;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: var(--text-primary);
+            margin-right: -4px;
           }
 
-          .zoom-controls {
-            display: none;
+          .sheet-title {
+            font-size: 1.35rem;
+            font-weight: 800;
+            color: var(--text-primary);
+            margin: 0;
           }
 
-          .lang-btn {
-            padding: 4px 7px;
-            font-size: 0.75rem;
+          .sheet-subtitle {
+            font-size: 0.9rem;
+            font-weight: 600;
+            color: var(--text-muted);
+            margin: 0 0 0.5rem 0;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+          }
+
+          .sheet-section {
+            display: flex;
+            flex-direction: column;
+            gap: 0.75rem;
+          }
+
+          .sheet-row {
+            display: flex;
+            align-items: center;
+            background: rgba(128, 128, 128, 0.08);
+            border-radius: 16px;
+            padding: 6px;
+            border: 1px solid rgba(128, 128, 128, 0.1);
+            gap: 6px;
+          }
+
+          .sheet-btn {
+            flex: 1;
+            padding: 12px 6px;
+            background: transparent;
+            border: none;
+            border-radius: 12px;
+            color: var(--text-muted);
+            font-weight: 700;
+            font-size: 0.95rem;
+            cursor: pointer;
+            transition: all 0.2s;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+          }
+
+          .sheet-btn.active {
+            background: var(--card-bg);
+            color: var(--primary);
+            box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+          }
+
+          .sheet-val {
+            min-width: 60px;
+            text-align: center;
+            font-weight: 800;
+            color: var(--primary);
+            font-size: 1.05rem;
+          }
+
+          .sheet-btn.full-width {
+            background: rgba(128, 128, 128, 0.08);
+            border: 1px solid rgba(128, 128, 128, 0.1);
+            padding: 16px;
+            color: var(--text-primary);
+          }
+
+          .sheet-btn.full-width:active {
+            background: rgba(128, 128, 128, 0.15);
+          }
+
+          /* Modals overrides */
+          .search-modal-overlay {
+            padding: 0;
+            align-items: flex-end;
           }
 
           .search-modal, .ai-modal {
-            height: 95vh;
-            max-height: 95vh;
-            border-radius: var(--radius-md);
+            height: 92vh;
+            max-height: 92vh;
+            border-radius: 24px 24px 0 0;
+            margin-top: auto;
           }
 
           .ai-modal-body {
-            padding: 1.25rem;
-          }
-
-          .ai-result-content {
-            font-size: 0.92rem;
-          }
-
-          .search-modal-overlay {
-            padding: 0.5rem;
+            padding: 1rem;
           }
 
           .book-search-results {
             width: calc(100vw - 2rem);
             left: -1rem;
+            top: 60px;
           }
 
-          /* Comparative stacks vertically on mobile */
           .iframe-wrapper.compare-active {
             flex-direction: column;
           }
@@ -2884,8 +3270,7 @@ export default function Reader({ params, searchParams }) {
             border-bottom: 1px solid var(--card-border);
           }
 
-          .compare-left,
-          .compare-right {
+          .compare-left, .compare-right {
             flex: 1 !important;
             min-height: 0;
           }
@@ -2900,166 +3285,16 @@ export default function Reader({ params, searchParams }) {
             content: '⋯';
           }
 
-          /* Full-width translation indicator for mobile */
           .translation-indicator {
             position: fixed;
             top: auto;
-            bottom: 0;
-            left: 0;
-            right: 0;
-            border-radius: 0;
-            padding: 1rem;
-            font-size: 1rem;
+            bottom: 90px;
+            left: 50%;
+            transform: translateX(-50%);
+            border-radius: 999px;
+            padding: 0.8rem 1.5rem;
             z-index: 999;
-            justify-content: center;
-          }
-        }
-
-        @media (max-width: 480px) {
-          .toolbar-left {
-            width: 100%;
-            justify-content: space-between;
-          }
-
-          .toolbar-right {
-            width: 100%;
-          }
-
-          .local-search-form {
-            width: 100%;
-            flex: 1;
-          }
-
-          .nav-controls {
-            display: flex;
-          }
-
-          .theme-controls {
-            display: flex;
-          }
-
-          .theme-btn {
-            width: 30px;
-            height: 30px;
-            font-size: 0.75rem;
-          }
-
-          .ai-controls {
-            display: none;
-          }
-        }
-
-        /* ─── Breadcrumb ─── */
-        .breadcrumb-bar {
-          padding: 6px 16px;
-          font-size: 0.78rem;
-          color: var(--text-muted);
-          background: var(--background);
-          border-bottom: 1px solid var(--card-border);
-          white-space: nowrap;
-          overflow: hidden;
-          text-overflow: ellipsis;
-        }
-        .breadcrumb-sep { margin: 0 6px; opacity: 0.5; }
-        .breadcrumb-current { color: var(--text-primary); font-weight: 600; }
-        .breadcrumb-parent { color: var(--text-muted); }
-
-        /* ─── TOC Filter ─── */
-        .toc-filter-wrap {
-          position: sticky;
-          top: 0;
-          z-index: 2;
-          padding: 8px 12px;
-          flex-shrink: 0;
-          background: var(--background);
-        }
-        .toc-filter-input {
-          width: 100%;
-          padding: 7px 30px 7px 10px;
-          border-radius: var(--radius-md);
-          border: 1px solid var(--card-border);
-          background: var(--background);
-          color: var(--text-primary);
-          font-size: 0.82rem;
-          outline: none;
-          transition: border-color 0.15s;
-        }
-        .toc-filter-input:focus {
-          border-color: var(--primary);
-        }
-        .toc-filter-input::placeholder {
-          color: var(--text-muted);
-        }
-        .toc-filter-clear {
-          position: absolute;
-          right: 18px;
-          top: 50%;
-          transform: translateY(-50%);
-          background: none;
-          border: none;
-          cursor: pointer;
-          color: var(--text-muted);
-          font-size: 0.9rem;
-          padding: 2px 4px;
-        }
-        .toc-filter-clear:hover { color: var(--text-primary); }
-
-        /* ─── Iframe Fade Transition ─── */
-        .content-iframe {
-          transition: opacity 0.2s ease;
-        }
-        .content-iframe.iframe-loading {
-          opacity: 0.3;
-          pointer-events: none;
-        }
-
-        /* ─── Mobile Bottom Nav ─── */
-        .mobile-bottom-nav {
-          display: none;
-        }
-
-        @media (max-width: 768px) {
-          .mobile-bottom-nav {
-            display: flex;
-            position: fixed;
-            bottom: 0;
-            left: 0;
-            right: 0;
-            z-index: 1000;
-            background: var(--toolbar-bg);
-            backdrop-filter: blur(16px);
-            -webkit-backdrop-filter: blur(16px);
-            border-top: 1px solid var(--card-border);
-            padding: 6px 0;
-            padding-bottom: max(6px, env(safe-area-inset-bottom));
-            justify-content: space-around;
-            align-items: center;
-          }
-
-          .mobile-bottom-nav button {
-            background: none;
-            border: none;
-            color: var(--text-primary);
-            font-size: 1.2rem;
-            padding: 8px 14px;
-            cursor: pointer;
-            border-radius: var(--radius-md);
-            transition: background 0.15s;
-          }
-
-          .mobile-bottom-nav button:hover,
-          .mobile-bottom-nav button:active {
-            background: var(--card-hover);
-          }
-
-          .mobile-bottom-nav button:disabled {
-            opacity: 0.3;
-            pointer-events: none;
-          }
-
-          /* Add bottom padding to main content so it's not hidden behind bottom nav */
-          .main-content {
-            padding-bottom: 60px;
+            box-shadow: var(--shadow-lg);
           }
         }
 

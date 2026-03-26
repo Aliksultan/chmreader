@@ -24,7 +24,7 @@ export default function AiStudyHub({
   const sharedProps = { contentHtml, pageKey, targetLang, apiKey, onRequireApiKey };
 
   return (
-    <div className="search-modal-overlay" onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
+    <div className="search-modal-overlay" style={{ zIndex: 1100 }} onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
       <div className="ai-hub-modal">
         <div className="ai-hub-header">
           <div className="ai-hub-title">
@@ -133,6 +133,33 @@ export default function AiStudyHub({
           overflow-y: auto;
           background: var(--background);
           position: relative;
+        }
+
+        @media (max-width: 1024px) {
+          .ai-hub-modal {
+            width: 100%;
+            max-width: 100%;
+            height: 100vh;
+            max-height: 100vh;
+            border-radius: 0;
+            margin-top: 0;
+            border: none;
+            animation: slideUpMobile 0.4s cubic-bezier(0.16, 1, 0.3, 1);
+          }
+
+          @keyframes slideUpMobile {
+            from { transform: translateY(100%); }
+            to { transform: translateY(0); }
+          }
+
+          .ai-hub-header {
+            padding: 16px 20px;
+          }
+
+          .ai-tab {
+            padding: 14px 16px;
+            font-size: 0.88rem;
+          }
         }
       `}</style>
     </div>

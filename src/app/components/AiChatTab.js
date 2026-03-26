@@ -82,11 +82,16 @@ export default function AiChatTab({ contentHtml, pageKey, targetLang, apiKey, on
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
+  const fetchedRef = useRef(false);
+
   useEffect(() => {
     if (!apiKey) {
       onRequireApiKey();
       return;
     }
+
+    if (fetchedRef.current) return;
+    fetchedRef.current = true;
 
     async function fetchInitialExplanation() {
       try {
@@ -185,14 +190,14 @@ export default function AiChatTab({ contentHtml, pageKey, targetLang, apiKey, on
       </div>
 
       {tips.length > 0 && (
-        <div className="rabbit-holes">
-          <p className="hint-title">🐰 Rabbit holes to explore:</p>
+        <details className="rabbit-holes">
+          <summary className="hint-title">🐰 Rabbit holes to explore <span className="expand-hint">(Tap to expand)</span></summary>
           <div className="hint-chips">
             {tips.map((t, i) => (
               <button key={i} className="hint-chip" onClick={() => insertTip(t)}>{t}</button>
             ))}
           </div>
-        </div>
+        </details>
       )}
 
       <form onSubmit={handleSubmit} className="chat-input-area">
@@ -258,10 +263,28 @@ export default function AiChatTab({ contentHtml, pageKey, targetLang, apiKey, on
           background: rgba(0,0,0,0.03);
           border-radius: 8px;
         }
+        details.rabbit-holes summary {
+          cursor: pointer;
+          outline: none;
+          list-style: none; /* Hide default arrow in some browsers */
+        }
+        details.rabbit-holes summary::-webkit-details-marker {
+          display: none;
+        }
+        .rabbit-holes[open] .hint-chips {
+          margin-top: 12px;
+        }
         .hint-title {
-          font-size: 0.85rem;
-          margin: 0 0 10px 0;
+          font-size: 0.9rem;
+          margin: 0;
+          color: var(--text-primary);
+          font-weight: 600;
+        }
+        .expand-hint {
+          font-size: 0.75rem;
           color: var(--text-muted);
+          font-weight: normal;
+          margin-left: 6px;
         }
         .hint-chips {
           display: flex;
@@ -274,6 +297,7 @@ export default function AiChatTab({ contentHtml, pageKey, targetLang, apiKey, on
           padding: 6px 12px;
           border-radius: 16px;
           font-size: 0.85rem;
+          color: var(--text-primary);
           cursor: pointer;
           transition: all 0.2s;
         }
