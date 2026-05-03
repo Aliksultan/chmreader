@@ -13,6 +13,16 @@ const nextConfig = {
       canvas: './empty-module.js',
     },
   },
+  experimental: {
+    outputFileTracingExcludes: {
+      '*': [
+        'chm_extract/**/*',
+        'scripts/**/*',
+        '**/*.pdf',
+        '**/*.chm'
+      ],
+    },
+  },
 };
 
 export default nextConfig;
