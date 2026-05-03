@@ -6,8 +6,9 @@ function cleanName(filename) {
     let name = filename;
     // Remove extension
     name = name.replace(/\.html?$/i, '');
-    // Remove leading numbers and spaces/dashes (e.g., "01 ", "02-", etc.)
-    name = name.replace(/^[\d\s\-_]+/, '');
+    // Remove ONLY the first grouping of leading digits and spaces/dashes (e.g., "01 " or "12-")
+    // This prevents stripping valid numbers like "1.Ders" if it was prefixed as "03 1.Ders"
+    name = name.replace(/^\d+[\s\-_]+/, '');
     return name;
 }
 

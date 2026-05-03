@@ -6,7 +6,7 @@ import iconv from 'iconv-lite';
 function cleanName(filename) {
     let name = filename;
     name = name.replace(/\.html?$/i, '');
-    name = name.replace(/^[\d\s\-_]+/, '');
+    name = name.replace(/^\d+[\s\-_]+/, '');
     return name;
 }
 
