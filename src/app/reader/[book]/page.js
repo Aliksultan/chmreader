@@ -497,16 +497,15 @@ export default function Reader({ params, searchParams }) {
   }, [currentPage, book, loading, error]);
 
   useEffect(() => {
-    fetch(`/api/read/${encodeURIComponent(book)}`)
-      .then(res => {
-        if (!res.ok) throw new Error('Failed to decompile book');
-        return res.json();
-      })
-      .then(data => {
-        setCacheUrl(data.cacheUrl);
-        return fetch(`/api/toc/${encodeURIComponent(book)}`).then(res => res.json()).then(tocData => ({ ...data, tocData }));
-      })
-      .then(({ cacheUrl, tocData }) => {
+    const t = Date.now();
+    Promise.all([
+      fetch(`/api/read/${encodeURIComponent(book)}?t=${t}`).then(res => res.json()),
+      fetch(`/api/toc/${encodeURIComponent(book)}?t=${t}`).then(res => res.json())
+    ])
+      .then(([readData, tocData]) => {
+        if (readData.cacheUrl) {
+          setCacheUrl(readData.cacheUrl);
+        }
         setToc(tocData.toc || []);
 
         const buildTocMap = (nodes) => {
@@ -530,11 +529,25 @@ export default function Reader({ params, searchParams }) {
         setFlattenedToc(flattenList(tocData.toc || []));
 
         // Restore progress or find first link
-        const savedPage = localStorage.getItem(`chm_progress_${book}`);
+        let savedPage = localStorage.getItem(`chm_progress_${book}`);
+        if (savedPage) {
+            // Scrub old paths
+            if (savedPage.includes('/cache/')) {
+                savedPage = savedPage.replace(/\/cache\/[^/]+/, readData.cacheUrl);
+            }
+            if (savedPage.includes('/api/content/kutuphane/')) {
+                savedPage = savedPage.replace('/api/content/kutuphane/', '/api/content/');
+            }
+            
+            // Extreme failsafe to prevent looping 404s due to a completely corrupted saved path
+            if (savedPage === `/api/content//index.htm` || savedPage === `/api/content/index.htm`) {
+                savedPage = null; // force it to pick the first link automatically
+            }
+        }
 
         if (targetPage) {
           // If a specific page is requested via URL, load it
-          setCurrentPage(`${cacheUrl || `/cache/${book.replace('.chm', '')}`}/${targetPage}`);
+          setCurrentPage(`${readData.cacheUrl || `/cache/${book.replace('.chm', '')}`}/${targetPage}`);
         } else if (savedPage) {
           // Otherwise load saved progress
           setCurrentPage(savedPage);
@@ -554,9 +567,9 @@ export default function Reader({ params, searchParams }) {
           if (tocData.toc && tocData.toc.length > 0) {
             firstLink = findFirstLink(tocData.toc);
             if (firstLink) {
-              setCurrentPage(`${cacheUrl || `/cache/${book.replace('.chm', '')}`}/${firstLink}`);
+              setCurrentPage(`${readData.cacheUrl || `/cache/${book.replace('.chm', '')}`}/${firstLink}`);
             } else {
-              setCurrentPage(`${cacheUrl}/index.htm`);
+              setCurrentPage(`${readData.cacheUrl}/index.htm`);
             }
           }
         }

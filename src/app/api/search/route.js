@@ -1,36 +1,36 @@
 import { NextResponse } from 'next/server';
 import fs from 'fs';
 import path from 'path';
-import { parseHHC } from '../toc/[book]/hhcParser';
+import iconv from 'iconv-lite';
 
-const memoizedTocMap = {};
+function cleanName(filename) {
+    let name = filename;
+    name = name.replace(/\.html?$/i, '');
+    name = name.replace(/^[\d\s\-_]+/, '');
+    return name;
+}
 
-function getTocMap(bookCachePath) {
-    if (memoizedTocMap[bookCachePath]) return memoizedTocMap[bookCachePath];
-
+function getTocMap(bookDirPath) {
     let map = {};
-    if (!fs.existsSync(bookCachePath)) return map;
+    if (!fs.existsSync(bookDirPath)) return map;
 
-    const files = fs.readdirSync(bookCachePath);
-    const hhcFile = files.find(file => file.toLowerCase().endsWith('.hhc'));
-    if (!hhcFile) return map;
+    const flatten = (dirPath, currentPath = [], relativePath = '') => {
+        const files = fs.readdirSync(dirPath);
+        for (const file of files) {
+            const fullPath = path.join(dirPath, file);
+            const stat = fs.statSync(fullPath);
+            const nextRelativePath = relativePath ? `${relativePath}/${file}` : file;
+            const cleaned = cleanName(file);
+            const newPath = [...currentPath, cleaned];
 
-    try {
-        const hhcPath = path.join(bookCachePath, hhcFile);
-        const tocInfo = parseHHC(hhcPath);
-
-        const flatten = (nodes, currentPath = []) => {
-            for (const node of nodes) {
-                const newPath = [...currentPath, node.name];
-                if (node.local) map[node.local] = newPath;
-                if (node.children) flatten(node.children, newPath);
+            if (stat.isDirectory()) {
+                flatten(fullPath, newPath, nextRelativePath);
+            } else if (file.toLowerCase().endsWith('.htm') || file.toLowerCase().endsWith('.html')) {
+                map[nextRelativePath] = newPath;
             }
-        };
-        flatten(tocInfo);
-        memoizedTocMap[bookCachePath] = map;
-    } catch (e) {
-        console.error("Error creating toc map for search:", e);
-    }
+        }
+    };
+    flatten(bookDirPath);
     return map;
 }
 
@@ -45,6 +45,7 @@ function searchDirectory(dir, query, results, bookName, basePath, tocMap) {
         if (stat.isDirectory()) {
             searchDirectory(fullPath, query, results, bookName, basePath, tocMap);
         } else if (file.toLowerCase().endsWith('.html') || file.toLowerCase().endsWith('.htm')) {
+            // Note: backslashes replaced with forward slashes for cross-platform compatibility mapping
             const relativePath = path.relative(basePath, fullPath).replace(/\\/g, '/');
             const hierarchy = tocMap[relativePath] || [file];
             const lowerQuery = query.toLowerCase();
@@ -73,7 +74,8 @@ function searchDirectory(dir, query, results, bookName, basePath, tocMap) {
 
             let snippet = '';
             try {
-                const content = fs.readFileSync(fullPath, 'utf-8');
+                const buffer = fs.readFileSync(fullPath);
+                const content = iconv.decode(buffer, 'windows-1254');
                 const lowerContent = content.toLowerCase();
 
                 if (lowerContent.indexOf(lowerQuery) !== -1) {
@@ -98,8 +100,8 @@ function searchDirectory(dir, query, results, bookName, basePath, tocMap) {
             const isDirectMatch = nodeMatch || (bookNameMatch && hierarchy.length <= 1) || snippet;
 
             if (isDirectMatch) {
-                const link = `/reader/${encodeURIComponent(bookName + '.chm')}?page=${encodeURIComponent(relativePath)}`;
-                const directUrl = `/cache/${bookName}/${relativePath}`;
+                const link = `/reader/${encodeURIComponent(bookName)}?page=${encodeURIComponent(relativePath)}`;
+                const directUrl = bookName === 'kutuphane' ? `/api/content/${relativePath}` : `/api/content/${bookName}/${relativePath}`;
 
                 results.push({
                     book: bookName,
@@ -122,15 +124,19 @@ export async function POST(request) {
         const { query, targetBook } = await request.json();
         if (!query || query.length < 3) return NextResponse.json({ results: [] });
 
-        // Single-book mode: search the pre-deployed cache directly
-        const bookName = targetBook || 'book';
-        const bookCachePath = path.join(process.cwd(), 'public', 'cache', bookName);
-
+        const bookName = targetBook || '';
+        if (!bookName) return NextResponse.json({ results: [] });
+        
+        let bookDirPath = path.join(process.cwd(), 'db', bookName);
+        if (bookName === 'kutuphane') {
+            bookDirPath = path.join(process.cwd(), 'db');
+        }
+        
         const results = [];
 
-        if (fs.existsSync(bookCachePath)) {
-            const tocMap = getTocMap(bookCachePath);
-            searchDirectory(bookCachePath, query, results, bookName, bookCachePath, tocMap);
+        if (fs.existsSync(bookDirPath)) {
+            const tocMap = getTocMap(bookDirPath);
+            searchDirectory(bookDirPath, query, results, bookName, bookDirPath, tocMap);
         }
 
         results.sort((a, b) => b.score - a.score);

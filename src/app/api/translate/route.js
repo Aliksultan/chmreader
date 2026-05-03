@@ -171,11 +171,33 @@ export async function POST(request) {
 
         const langName = langNames[targetLang] || targetLang;
 
-        // 1) Check Redis cache FIRST — no API key needed for cached translations
-        const kvKey = pageKey ? `tr: ${pageKey}: ${targetLang}` : null;
+        let fullPath = null;
+        let savePath = null;
+        if (pageKey && pageKey.startsWith('/api/content/')) {
+            const relativePath = decodeURIComponent(pageKey.substring('/api/content/'.length));
+            fullPath = require('path').join(process.cwd(), 'db', relativePath);
+            savePath = fullPath.replace(/\.html?$/i, `.${targetLang}.htm`);
+
+            // Check DISK CACHE first (User requested saving translated HTM format)
+            if (require('fs').existsSync(savePath)) {
+                console.log(`Loading translation from disk: ${savePath}`);
+                const doc = require('fs').readFileSync(savePath, 'utf8');
+                const bodyMatch = doc.match(/<body[^>]*>([\s\S]*?)<\/body>/i);
+                if (bodyMatch) {
+                    return NextResponse.json({ translation: bodyMatch[1].trim(), source: 'disk-cache' });
+                }
+            }
+        }
+
+        // 1) Check Redis cache SECOND — no API key needed for cached translations
+        const kvKey = pageKey ? `tr:${pageKey}:${targetLang}` : null;
         if (kvKey) {
             const cached = await getFromKV(kvKey);
             if (cached) {
+                // Mirror it to disk for future use
+                if (fullPath && savePath && require('fs').existsSync(fullPath)) {
+                    saveToDiskHtm(fullPath, savePath, cached);
+                }
                 return NextResponse.json({ translation: cached, source: 'kv-cache' });
             }
         }
@@ -193,7 +215,6 @@ export async function POST(request) {
             const chunks = splitIntoChunks(text, CHUNK_SIZE);
             console.log(`Processing ${chunks.length} chunks in parallel...`);
 
-            // Execute all chunks in parallel using Promise.all
             const translatedChunks = await Promise.all(
                 chunks.map(chunk => translateChunk(chunk, langName, apiKey))
             );
@@ -206,9 +227,40 @@ export async function POST(request) {
             await saveToKV(kvKey, fullTranslation);
         }
 
+        // Save translation to DISK as HTM format
+        if (fullPath && savePath && require('fs').existsSync(fullPath)) {
+            saveToDiskHtm(fullPath, savePath, fullTranslation);
+        }
+
         return NextResponse.json({ translation: fullTranslation });
     } catch (err) {
         console.error('Translation error:', err);
         return NextResponse.json({ error: err.message }, { status: 500 });
+    }
+}
+
+function saveToDiskHtm(originalPath, savePath, translatedBodyHtml) {
+    try {
+        const fs = require('fs');
+        const iconv = require('iconv-lite');
+        const buffer = fs.readFileSync(originalPath);
+        let originalHtml = iconv.decode(buffer, 'windows-1254');
+        
+        const bodyMatch = originalHtml.match(/<body[^>]*>/i);
+        const endBodyMatch = originalHtml.match(/<\/body>/i);
+        
+        if (bodyMatch && endBodyMatch) {
+            const beforeBody = originalHtml.substring(0, bodyMatch.index + bodyMatch[0].length);
+            const afterBody = originalHtml.substring(endBodyMatch.index);
+            
+            let newHtml = beforeBody + '\n' + translatedBodyHtml + '\n' + afterBody;
+            newHtml = newHtml.replace(/charset=windows-125[0-9]/ig, 'charset=utf-8');
+            newHtml = newHtml.replace(/charset=iso-8859-[0-9]/ig, 'charset=utf-8');
+            
+            fs.writeFileSync(savePath, newHtml, 'utf8');
+            console.log(`Successfully saved HTM translation to: ${savePath}`);
+        }
+    } catch (e) {
+        console.error('Failed to write translated HTM to disk:', e);
     }
 }

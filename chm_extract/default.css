@@ -1,0 +1,515 @@
+/* Text Styles */
+hr { color: #000000}
+body, table, tr, th /* Normal */
+{
+ font-size: 10pt;
+ font-family: 'Verdana';
+ font-style: normal;
+ font-weight: normal;
+ color: #000000;
+ text-decoration: none;
+}
+span.f_ArabcaDua /* Arabca Dua */
+{
+ font-size: 20pt;
+ font-family: 'Nur Arabic Font';
+}
+span.f_ArabcaMetin /* Arabca Metin */
+{
+ font-size: 20pt;
+ font-family: 'Traditional Arabic';
+}
+span.f_ArabcaODuab1 /* Arabca ODua b1 */
+{
+ font-size: 20pt;
+ font-family: 'Nur Arabic Font';
+ color: #ff0000;
+}
+span.f_ArabcaODuab2 /* Arabca ODua b2 */
+{
+ font-size: 20pt;
+ font-family: 'Nur Arabic Font';
+ color: #ff00ff;
+}
+span.f_ArabcaODuab3 /* Arabca ODua b3 */
+{
+ font-size: 20pt;
+ font-family: 'Nur Arabic Font';
+ color: #008000;
+}
+span.f_ArabcaODuab4 /* Arabca ODua b4 */
+{
+ font-size: 20pt;
+ font-family: 'Nur Arabic Font';
+ color: #ff6600;
+}
+span.f_ArabcaODuab5 /* Arabca ODua b5 */
+{
+ font-size: 20pt;
+ font-family: 'Nur Arabic Font';
+ color: #11639f;
+}
+span.f_ArabcaOrta /* Arabca Orta */
+{
+ font-size: 20pt;
+ font-family: 'Traditional Arabic';
+}
+span.f_ArabcaOrtaDua /* Arabca Orta Dua */
+{
+ font-size: 20pt;
+ font-family: 'Nur Arabic Font';
+}
+span.f_arabic /* arabic */
+{
+ font-size: 20pt;
+ font-family: 'Traditional Arabic';
+ color: #2a2a2a;
+}
+span.f_arabicbaslikorta /* arabic baslik orta */
+{
+ font-size: 20pt;
+ font-family: 'Traditional Arabic';
+ color: #ff0000;
+}
+span.f_arabichead2 /* arabic head2 */
+{
+ font-size: 22pt;
+ font-family: 'Traditional Arabic';
+ font-weight: bold;
+ color: #2a2a2a;
+}
+span.f_arabickuranmetin /* arabic kuran metin */
+{
+ font-size: 20pt;
+ font-family: 'Traditional Arabic';
+ color: #ff0000;
+}
+span.f_arabicnot /* arabic not */
+{
+ font-size: 16pt;
+ font-family: 'Arial';
+ color: #2a2a2a;
+}
+span.f_arabicsolyana /* arabic sol yana */
+{
+ font-size: 20pt;
+ font-family: 'Traditional Arabic';
+ color: #2a2a2a;
+}
+span.f_arabictakrir /* arabic takrir */
+{
+ font-size: 20pt;
+ font-family: 'Traditional Arabic';
+ color: #2a2a2a;
+}
+span.f_ar-ahdari /* ar-ahdari */
+{
+ font-size: 20pt;
+ font-family: 'Traditional Arabic';
+ color: #993300;
+}
+span.f_ar-gelenbevi /* ar-gelenbevi */
+{
+ font-size: 20pt;
+ font-family: 'Traditional Arabic';
+ color: #993300;
+}
+span.f_ar-ilem /* ar-ilem */
+{
+ font-size: 20pt;
+ font-family: 'Traditional Arabic';
+ color: #ff0000;
+}
+span.f_CodeExample /* Code Example */
+{
+ font-size: 8pt;
+ font-family: 'Courier New';
+}
+span.f_Comment /* Comment */
+{
+}
+span.f_DahiliSoez /* Dahili Söz */
+{
+ color: #910000;
+}
+span.f_DDHead /* DD Head */
+{
+ font-weight: bold;
+}
+span.f_Esmanormal /* Esma normal */
+{
+ font-weight: bold;
+ color: #ff0000;
+}
+span.f_expandbas /* expand bas */
+{
+ color: #076298;
+}
+span.f_expandizh /* expand izh */
+{
+ font-style: italic;
+ color: #008000;
+}
+span.f_Hasiye /* Hasiye */
+{
+ font-weight: bold;
+ color: #ff6600;
+}
+span.f_Heading1 /* Heading1 */
+{
+ font-size: 14pt;
+ font-family: 'Tahoma';
+ color: #ffffe1;
+}
+span.f_Heading2 /* Heading2 */
+{
+ font-size: 14pt;
+ letter-spacing: 1px;
+}
+span.f_Heading2Alt /* Heading2 Alt */
+{
+ font-size: 12pt;
+ font-weight: bold;
+ letter-spacing: 1px;
+}
+span.f_Heading3 /* Heading3 */
+{
+ font-size: 11pt;
+ font-family: 'Arial';
+ font-weight: bold;
+ color: #353535;
+ letter-spacing: 2px;
+}
+span.f_Heading3Alt /* Heading3 Alt */
+{
+ font-family: 'Arial';
+ font-weight: bold;
+ color: #353535;
+ letter-spacing: 2px;
+}
+span.f_Heading4 /* Heading4 */
+{
+ font-size: 22pt;
+ color: #0c5e89;
+}
+span.f_hicri /* hicri */
+{
+ font-size: 9pt;
+ font-family: 'Tahoma';
+ color: #333399;
+}
+span.f_ImageCaption /* Image Caption */
+{
+ font-size: 8pt;
+ font-weight: bold;
+}
+span.f_izah-noalt /* izah-no alt */
+{
+ font-size: 16pt;
+ font-family: 'Traditional Arabic';
+ font-weight: bold;
+ color: #ff0000;
+}
+span.f_izah-nonormal /* izah-no normal */
+{
+ font-size: 16pt;
+ font-family: 'Traditional Arabic';
+ font-weight: bold;
+}
+span.f_KonuVurgu /* Konu Vurgu */
+{
+ font-weight: bold;
+ color: #404040;
+}
+span.f_LineHasiye /* Line Hasiye */
+{
+ font-size: 12pt;
+ font-weight: bold;
+ color: #b61632;
+}
+span.f_madde1 /* madde1 */
+{
+ font-weight: bold;
+ color: #2c3749;
+}
+span.f_Meal /* Meal */
+{
+ font-size: 8pt;
+}
+span.f_MetinMeal /* Metin Meal */
+{
+ font-style: italic;
+ color: #be5c21;
+}
+span.f_Notes /* Notes */
+{
+}
+span.f_NumaraKoy /* Numara Koy */
+{
+ font-weight: bold;
+ color: #004a00;
+ background-color: #f0f9ff;
+}
+span.f_Paragraf /* Paragraf */
+{
+ color: #353535;
+}
+span.f_SualCevap /* Sual Cevap */
+{
+ font-weight: bold;
+ color: #5c1e12;
+}
+span.f_tabiredilen /* tabir edilen */
+{
+ font-style: italic;
+ font-weight: bold;
+ color: #646400;
+}
+span.f_TableOrtala /* Table Ortala */
+{
+}
+span.f_TalikatSayfaNo /* Talikat Sayfa No */
+{
+ font-size: 16pt;
+ font-family: 'Arial';
+ color: #0d5773;
+ text-decoration: underline;
+}
+span.f_Yatay /* Yatay */
+{
+ font-style: italic;
+ letter-spacing: 1px;
+}
+span.f_YataySag /* Yatay Sag */
+{
+ font-style: italic;
+ letter-spacing: 1px;
+}
+/* Paragraph styles */
+p /* Normal */
+{
+ text-align: left;
+ text-indent: 0px;
+ padding: 0px 0px 0px 0px;
+ margin: 0px 0px 0px 0px;
+}
+.p_ArabcaDua /* Arabca Dua */
+{
+}
+.p_ArabcaMetin /* Arabca Metin */
+{
+}
+.p_ArabcaODuab1 /* Arabca ODua b1 */
+{
+ text-align: center;
+}
+.p_ArabcaODuab2 /* Arabca ODua b2 */
+{
+ text-align: center;
+}
+.p_ArabcaODuab3 /* Arabca ODua b3 */
+{
+ text-align: center;
+}
+.p_ArabcaODuab4 /* Arabca ODua b4 */
+{
+ text-align: center;
+}
+.p_ArabcaODuab5 /* Arabca ODua b5 */
+{
+ text-align: center;
+}
+.p_ArabcaOrta /* Arabca Orta */
+{
+ text-align: center;
+}
+.p_ArabcaOrtaDua /* Arabca Orta Dua */
+{
+ text-align: center;
+}
+.p_arabic /* arabic */
+{
+ text-align: right;
+}
+.p_arabicbaslikorta /* arabic baslik orta */
+{
+ text-align: center;
+}
+.p_arabichead2 /* arabic head2 */
+{
+ text-align: right;
+}
+.p_arabickuranmetin /* arabic kuran metin */
+{
+}
+.p_arabicnot /* arabic not */
+{
+ text-align: right;
+}
+.p_arabicsolyana /* arabic sol yana */
+{
+}
+.p_arabictakrir /* arabic takrir */
+{
+ text-align: right;
+ margin: 0px 29px 0px 0px;
+}
+.p_ar-ahdari /* ar-ahdari */
+{
+ text-align: center;
+}
+.p_ar-gelenbevi /* ar-gelenbevi */
+{
+ text-align: right;
+}
+.p_ar-ilem /* ar-ilem */
+{
+ text-align: right;
+}
+.p_CodeExample /* Code Example */
+{
+ white-space: nowrap;
+}
+.p_Comment /* Comment */
+{
+}
+.p_DahiliSoez /* Dahili Söz */
+{
+ text-align: justify;
+ text-indent: 29px;
+ margin: 3px 0px 3px 0px;
+}
+.p_DDHead /* DD Head */
+{
+ margin: 0px 0px 0px 38px;
+}
+.p_Esmanormal /* Esma normal */
+{
+}
+.p_expandbas /* expand bas */
+{
+ text-align: justify;
+ text-indent: 29px;
+ margin: 3px 0px 3px 0px;
+}
+.p_expandizh /* expand izh */
+{
+ text-align: justify;
+ text-indent: 29px;
+ margin: 3px 0px 3px 0px;
+}
+.p_Hasiye /* Hasiye */
+{
+ text-align: justify;
+ text-indent: 29px;
+ margin: 3px 0px 3px 0px;
+}
+.p_Heading1 /* Heading1 */
+{
+}
+.p_Heading2 /* Heading2 */
+{
+ text-align: center;
+}
+.p_Heading2Alt /* Heading2 Alt */
+{
+ text-align: center;
+ margin: 0px 0px 5px 0px;
+}
+.p_Heading3 /* Heading3 */
+{
+ text-align: justify;
+ text-indent: 29px;
+ margin: 3px 0px 3px 0px;
+}
+.p_Heading3Alt /* Heading3 Alt */
+{
+ text-align: justify;
+ text-indent: 29px;
+ margin: 3px 0px 3px 0px;
+}
+.p_Heading4 /* Heading4 */
+{
+ text-align: center;
+}
+.p_hicri /* hicri */
+{
+ text-align: justify;
+ text-indent: 29px;
+ margin: 3px 0px 3px 0px;
+}
+.p_ImageCaption /* Image Caption */
+{
+}
+.p_izah-noalt /* izah-no alt */
+{
+ text-align: right;
+}
+.p_izah-nonormal /* izah-no normal */
+{
+ text-align: right;
+}
+.p_KonuVurgu /* Konu Vurgu */
+{
+ text-align: justify;
+ text-indent: 29px;
+ margin: 3px 0px 3px 0px;
+}
+.p_LineHasiye /* Line Hasiye */
+{
+ text-align: justify;
+ text-indent: 29px;
+ margin: 3px 0px 3px 0px;
+}
+.p_Meal /* Meal */
+{
+ text-align: justify;
+ margin: 2px 0px 2px 0px;
+}
+.p_MetinMeal /* Metin Meal */
+{
+ text-align: justify;
+ text-indent: 29px;
+ margin: 3px 0px 3px 0px;
+}
+.p_Notes /* Notes */
+{
+}
+.p_NumaraKoy /* Numara Koy */
+{
+ text-align: justify;
+ text-indent: 29px;
+ margin: 3px 0px 3px 0px;
+}
+.p_Paragraf /* Paragraf */
+{
+ text-align: justify;
+ text-indent: 29px;
+ margin: 3px 0px 3px 0px;
+}
+.p_tabiredilen /* tabir edilen */
+{
+ text-align: justify;
+ text-indent: 29px;
+ margin: 3px 0px 3px 0px;
+}
+.p_TableOrtala /* Table Ortala */
+{
+ text-align: center;
+ margin: 4px 0px 4px 0px;
+}
+.p_TalikatSayfaNo /* Talikat Sayfa No */
+{
+ text-align: right;
+}
+.p_Yatay /* Yatay */
+{
+ text-align: center;
+ margin: 0px 29px 3px 29px;
+}
+.p_YataySag /* Yatay Sag */
+{
+ text-align: justify;
+ text-indent: 14px;
+ margin: 0px 29px 3px 173px;
+}

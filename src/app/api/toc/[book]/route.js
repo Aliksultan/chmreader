@@ -1,33 +1,72 @@
 import { NextResponse } from 'next/server';
 import fs from 'fs';
 import path from 'path';
-import { parseHHC } from './hhcParser';
+
+function cleanName(filename) {
+    let name = filename;
+    // Remove extension
+    name = name.replace(/\.html?$/i, '');
+    // Remove leading numbers and spaces/dashes (e.g., "01 ", "02-", etc.)
+    name = name.replace(/^[\d\s\-_]+/, '');
+    return name;
+}
+
+function buildTocTree(dirPath, basePath, relativePath = '') {
+    const items = [];
+    if (!fs.existsSync(dirPath)) return items;
+
+    const files = fs.readdirSync(dirPath);
+    
+    // Sort files to maintain original order (assuming they are prefixed with numbers)
+    files.sort((a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' }));
+
+    for (const file of files) {
+        const fullPath = path.join(dirPath, file);
+        const stat = fs.statSync(fullPath);
+        const nextRelativePath = relativePath ? `${relativePath}/${file}` : file;
+        
+        if (stat.isDirectory()) {
+            items.push({
+                name: cleanName(file),
+                local: '', // Folders don't have a direct page in this setup unless we define one
+                children: buildTocTree(fullPath, basePath, nextRelativePath)
+            });
+        } else if (file.toLowerCase().endsWith('.htm') || file.toLowerCase().endsWith('.html')) {
+            // Ignore localization side-car files from populating as main TOC entries
+            if (!file.match(/\.(ru|kk)\.html?$/i)) {
+                items.push({
+                    name: cleanName(file),
+                    local: nextRelativePath,
+                    children: []
+                });
+            }
+        }
+    }
+    return items;
+}
 
 export async function GET(request, { params }) {
-    const { book } = await params;
+    const unwrappedParams = await params;
+    const book = unwrappedParams.book;
     const decodedBook = decodeURIComponent(book);
-    const cacheDir = path.join(process.cwd(), 'public', 'cache', decodedBook.replace('.chm', ''));
+    const bookName = decodedBook.replace('.chm', '').replace('.CHM', '');
+    let bookDir = path.join(process.cwd(), 'db', bookName);
 
-    if (!fs.existsSync(cacheDir)) {
-        return NextResponse.json({ error: 'Book not decompiled yet' }, { status: 404 });
+    if (bookName === 'kutuphane') {
+        bookDir = path.join(process.cwd(), 'db');
     }
 
-    // Find the .hhc file in the cache directory
-    const files = fs.readdirSync(cacheDir);
-    const hhcFile = files.find(file => file.toLowerCase().endsWith('.hhc'));
-
-    if (!hhcFile) {
-        return NextResponse.json({ error: 'TOC file (.hhc) not found' }, { status: 404 });
+    if (!fs.existsSync(bookDir)) {
+        return NextResponse.json({ error: 'Book directory not found' }, { status: 404 });
     }
 
     try {
-        const hhcPath = path.join(cacheDir, hhcFile);
-        const toc = parseHHC(hhcPath);
+        const toc = buildTocTree(bookDir, bookDir);
         return NextResponse.json({ toc }, {
             headers: { 'Cache-Control': 'public, max-age=86400, s-maxage=86400' }
         });
     } catch (error) {
-        console.error("Error parsing TOC:", error);
-        return NextResponse.json({ error: 'Failed to parse TOC' }, { status: 500 });
+        console.error("Error building TOC:", error);
+        return NextResponse.json({ error: 'Failed to build TOC' }, { status: 500 });
     }
 }
