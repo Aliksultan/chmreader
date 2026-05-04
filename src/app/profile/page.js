@@ -3,6 +3,7 @@
 import { useState } from 'react';
 import { useReader } from '@/context/ReaderContext';
 import Link from 'next/link';
+import WhatsNew from '@/components/WhatsNew';
 
 const COLOR_MAP = {
   yellow: { bg: '#fde68a', text: '#78350f', border: '#fbbf24' },
@@ -18,10 +19,11 @@ function formatDate(ts) {
 
 export default function ProfilePage() {
   const { user, login, logout, bookmarks, removeBookmark, highlightsIndex, removeFromHighlightsIndex } = useReader();
-  const [tab, setTab] = useState('bookmarks'); // 'bookmarks' | 'quotes'
+  const [tab, setTab] = useState('bookmarks');
   const [usernameInput, setUsernameInput] = useState('');
   const [error, setError] = useState('');
   const [filterBook, setFilterBook] = useState('all');
+  const [showWhatsNew, setShowWhatsNew] = useState(false);
 
   // Unique books that appear in highlights
   const quoteBooks = ['all', ...new Set(highlightsIndex.map(h => h.book))];
@@ -206,6 +208,15 @@ export default function ProfilePage() {
               {bookmarks.length} bookmarks · {highlightsIndex.length} quotes
             </p>
           </div>
+          <button onClick={() => setShowWhatsNew(true)} style={{
+            background: 'var(--surface)',
+            boxShadow: 'var(--shadow-neu-sm)',
+            border: 'none', borderRadius: '10px',
+            padding: '9px 16px',
+            fontFamily: 'var(--font-ui)', fontSize: '0.78rem', fontWeight: 700,
+            color: 'var(--primary)', cursor: 'pointer',
+            whiteSpace: 'nowrap',
+          }}>🎉 Жаңарту</button>
           <Link href="/" style={{
             background: 'var(--primary)',
             color: '#fff',
@@ -216,8 +227,9 @@ export default function ProfilePage() {
             fontWeight: 700,
             textDecoration: 'none',
             boxShadow: '3px 3px 10px rgba(0,102,102,0.25)',
+            whiteSpace: 'nowrap',
           }}>
-            Open Library
+            Кітапханаға →
           </Link>
         </div>
 
@@ -445,6 +457,38 @@ export default function ProfilePage() {
           </div>
         )}
       </div>
+
+      {/* Footer */}
+      <div style={{
+        maxWidth: '900px', margin: '0 auto',
+        padding: '0 24px 48px',
+        display: 'flex', flexDirection: 'column', gap: '12px',
+      }}>
+        <div style={{
+          background: 'var(--surface)',
+          boxShadow: 'var(--shadow-neu-in)',
+          borderRadius: '16px',
+          padding: '18px 22px',
+          display: 'flex', flexDirection: 'column', gap: '12px',
+        }}>
+          <p style={{ margin: 0, fontFamily: 'var(--font-ui)', fontSize: '0.78rem', color: 'var(--text-muted)', fontWeight: 700, letterSpacing: '0.05em', textTransform: 'uppercase' }}>Байланыс</p>
+          <a href="https://t.me/anonaskbot?start=n37k833uklxykpfu" target="_blank" rel="noopener noreferrer"
+            style={{ display: 'flex', alignItems: 'center', gap: '10px', textDecoration: 'none', color: 'var(--text)', fontFamily: 'var(--font-ui)', fontSize: '0.85rem' }}>
+            <span style={{ width: '32px', height: '32px', borderRadius: '9px', background: 'var(--surface)', boxShadow: 'var(--shadow-neu-sm)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '1rem', flexShrink: 0 }}>💬</span>
+            <span>Идеялар мен кері байланыс — <strong style={{ color: 'var(--primary)' }}>t.me/anonaskbot</strong></span>
+          </a>
+          <a href="https://send.monobank.ua/jar/4003035112072389" target="_blank" rel="noopener noreferrer"
+            style={{ display: 'flex', alignItems: 'center', gap: '10px', textDecoration: 'none', color: 'var(--text)', fontFamily: 'var(--font-ui)', fontSize: '0.85rem' }}>
+            <span style={{ width: '32px', height: '32px', borderRadius: '9px', background: 'var(--surface)', boxShadow: 'var(--shadow-neu-sm)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '1rem', flexShrink: 0 }}>☕</span>
+            <span>Демеу: <strong style={{ color: 'var(--primary)' }}>4003035112072389</strong> (Monobank)</span>
+          </a>
+        </div>
+        <p style={{ margin: 0, fontFamily: 'var(--font-ui)', fontSize: '0.72rem', color: 'var(--text-faint)', textAlign: 'center' }}>
+          Сіздің әр аудармаңыз тиын тұрады 🤍
+        </p>
+      </div>
+
+      {showWhatsNew && <WhatsNew forceShow onClose={() => setShowWhatsNew(false)} />}
     </div>
   );
 }

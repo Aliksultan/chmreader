@@ -1,6 +1,7 @@
 import { Inter, Amiri_Quran, Lora, Space_Mono } from "next/font/google";
 import "./globals.css";
 import { ReaderProvider } from "@/context/ReaderContext";
+import WhatsNew from "@/components/WhatsNew";
 
 const inter = Inter({
   variable: "--font-inter",
@@ -34,6 +35,7 @@ export default function RootLayout({ children }) {
     <html lang="en" suppressHydrationWarning>
       <body className={`${inter.variable} ${spaceMono.variable} ${lora.variable} ${amiri.variable} antialiased`}>
         <ReaderProvider>
+          <WhatsNew />
           {children}
         </ReaderProvider>
       </body>
