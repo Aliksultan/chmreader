@@ -13,15 +13,13 @@ const nextConfig = {
       canvas: './empty-module.js',
     },
   },
-  experimental: {
-    outputFileTracingExcludes: {
-      '*': [
-        'chm_extract/**/*',
-        'scripts/**/*',
-        '**/*.pdf',
-        '**/*.chm'
-      ],
-    },
+  outputFileTracingExcludes: {
+    '*': [
+      'chm_extract/**/*',
+      'scripts/**/*',
+      '**/*.pdf',
+      '**/*.chm'
+    ],
   },
 };
 

@@ -3,6 +3,9 @@
 import { useEffect, useState, use, useRef, useCallback } from 'react';
 import Link from 'next/link';
 import AiStudyHub from '../../components/AiStudyHub';
+import ReaderSettings from '@/components/ReaderSettings';
+import Highlighter from '@/components/Highlighter';
+import { useReader } from '@/context/ReaderContext';
 
 function TocNode({ item, cacheUrl, setCurrentPage, currentPage, level = 0, expandedPaths, onToggleExpand, nodePath }) {
   const hasChildren = item.children && item.children.length > 0;
@@ -73,6 +76,9 @@ export default function Reader({ params, searchParams }) {
   const unwrappedSearchParams = use(searchParams);
   const book = decodeURIComponent(unwrappedParams.book);
   const targetPage = unwrappedSearchParams.page ? decodeURIComponent(unwrappedSearchParams.page) : null;
+  
+  const { settings, updateSettings, user, bookmarks, addBookmark, removeBookmark, addToHighlightsIndex, removeFromHighlightsIndex } = useReader();
+
   const [cacheUrl, setCacheUrl] = useState(null);
   const [toc, setToc] = useState([]);
   const [tocMap, setTocMap] = useState({});
@@ -85,20 +91,6 @@ export default function Reader({ params, searchParams }) {
   const [splitPercent, setSplitPercent] = useState(50);
   const compareContentRef = useRef(null);
 
-  // New Toolbar States
-  const [theme, setTheme] = useState('system');
-  const [zoomLevel, setZoomLevel] = useState(() => {
-    if (typeof window !== 'undefined') {
-      const saved = localStorage.getItem('reader_zoom');
-      return saved ? parseInt(saved, 10) : 100;
-    }
-    return 100;
-  });
-  const [tocFilter, setTocFilter] = useState('');
-  const [iframeLoading, setIframeLoading] = useState(false);
-  const scrollPositionsRef = useRef({});
-  const [searchQuery, setSearchQuery] = useState('');
-
   // Book-Wide Search
   const [searchResults, setSearchResults] = useState(null);
   const [isSearching, setIsSearching] = useState(false);
@@ -107,6 +99,11 @@ export default function Reader({ params, searchParams }) {
   const RESULTS_PER_PAGE = 50;
   const iframeRef = useRef(null);
   const pendingHighlightRef = useRef(null);
+
+  const [tocFilter, setTocFilter] = useState('');
+  const [iframeLoading, setIframeLoading] = useState(false);
+  const scrollPositionsRef = useRef({});
+  const [searchQuery, setSearchQuery] = useState('');
 
   // Translation States
   const [isTranslating, setIsTranslating] = useState(false);
@@ -133,8 +130,7 @@ export default function Reader({ params, searchParams }) {
   const [isSaving, setIsSaving] = useState(false);
   const editorRef = useRef(null);
 
-  // Bookmarks
-  const [bookmarks, setBookmarks] = useState([]);
+  // Bookmarks (managed by ReaderContext — cloud synced)
   const [showBookmarks, setShowBookmarks] = useState(false);
 
   // Sidebar tab
@@ -145,20 +141,12 @@ export default function Reader({ params, searchParams }) {
   const [isMobileSearchActive, setIsMobileSearchActive] = useState(false);
   const [isNavVisible, setIsNavVisible] = useState(true);
 
-  // Load saved API key, bookmarks, and persist zoom
+  // Load saved API key
   useEffect(() => {
     const savedKey = localStorage.getItem('gemini_api_key');
     if (savedKey) setGeminiApiKey(savedKey);
-    const savedBookmarks = localStorage.getItem(`bookmarks_${book}`);
-    if (savedBookmarks) {
-      try { setBookmarks(JSON.parse(savedBookmarks)); } catch (e) { }
-    }
   }, []);
 
-  // Persist zoom level
-  useEffect(() => {
-    localStorage.setItem('reader_zoom', String(zoomLevel));
-  }, [zoomLevel]);
 
   // Navigation helpers
   const getCurrentIndex = () => {
@@ -188,24 +176,29 @@ export default function Reader({ params, searchParams }) {
   const toggleBookmark = () => {
     if (!currentPage) return;
     const clean = currentPage.split('?')[0].split('#')[0];
-    const tocIndex = getCurrentIndex();
-    const title = tocIndex !== -1 ? (tocMap[flattenedToc[tocIndex]] || flattenedToc[tocIndex]) : clean.split('/').pop();
-    const exists = bookmarks.some(b => b.url === clean);
-    let updated;
-    if (exists) {
-      updated = bookmarks.filter(b => b.url !== clean);
+    const existing = bookmarks.find(b => b.pageUrl === clean);
+    if (existing) {
+      removeBookmark(existing.id);
     } else {
-      updated = [...bookmarks, { url: clean, title, page: currentPage, addedAt: Date.now() }];
+      const tocIndex = getCurrentIndex();
+      const pageTitle = tocIndex !== -1
+        ? (tocMap[flattenedToc[tocIndex]] || flattenedToc[tocIndex])
+        : clean.split('/').pop();
+      addBookmark({
+        book,
+        bookTitle: book.replace('.chm', ''),
+        pageUrl: clean,
+        pageTitle,
+      });
     }
-    setBookmarks(updated);
-    localStorage.setItem(`bookmarks_${book}`, JSON.stringify(updated));
   };
 
   const isBookmarked = () => {
     if (!currentPage) return false;
     const clean = currentPage.split('?')[0].split('#')[0];
-    return bookmarks.some(b => b.url === clean);
+    return bookmarks.some(b => b.pageUrl === clean);
   };
+
 
   // Find the path in the TOC tree to a given local file
   const findPathInToc = useCallback((nodes, targetLocal, currentPath = '') => {
@@ -475,19 +468,6 @@ export default function Reader({ params, searchParams }) {
     return parts.join(' ➔ ');
   };
 
-  // Theme Sync
-  useEffect(() => {
-    const root = document.documentElement;
-    if (theme === 'dark') {
-      root.classList.add('dark');
-      root.classList.remove('light');
-    } else if (theme === 'light') {
-      root.classList.add('light');
-      root.classList.remove('dark');
-    } else {
-      root.classList.remove('dark', 'light');
-    }
-  }, [theme]);
 
   // Read Progress Save
   useEffect(() => {
@@ -683,10 +663,10 @@ export default function Reader({ params, searchParams }) {
     };
   }, [compareMode, compareHtml, currentPage]);
 
-  // Pinch-to-zoom on mobile
+  // Pinch-to-zoom on mobile — scales mainFontSize via ReaderContext
   useEffect(() => {
     let initialDist = 0;
-    let initialZoom = zoomLevel;
+    let initialFontSize = settings.mainFontSize;
     const getDistance = (touches) => {
       const dx = touches[0].clientX - touches[1].clientX;
       const dy = touches[0].clientY - touches[1].clientY;
@@ -695,15 +675,15 @@ export default function Reader({ params, searchParams }) {
     const onTouchStart = (e) => {
       if (e.touches.length === 2) {
         initialDist = getDistance(e.touches);
-        initialZoom = zoomLevel;
+        initialFontSize = settings.mainFontSize;
       }
     };
     const onTouchMove = (e) => {
       if (e.touches.length === 2) {
         const dist = getDistance(e.touches);
         const scale = dist / initialDist;
-        const newZoom = Math.max(50, Math.min(200, Math.round(initialZoom * scale)));
-        setZoomLevel(newZoom);
+        const newSize = Math.max(12, Math.min(32, Math.round(initialFontSize * scale)));
+        updateSettings({ mainFontSize: newSize });
       }
     };
     document.addEventListener('touchstart', onTouchStart, { passive: true });
@@ -712,7 +692,7 @@ export default function Reader({ params, searchParams }) {
       document.removeEventListener('touchstart', onTouchStart);
       document.removeEventListener('touchmove', onTouchMove);
     };
-  }, [zoomLevel]);
+  }, [settings.mainFontSize]);
 
   // Save scroll position before page change
   const saveScrollPosition = () => {
@@ -735,7 +715,6 @@ export default function Reader({ params, searchParams }) {
 
   const handleIframeLoad = () => {
     setIframeLoading(false);
-    applyZoom();
     applyIframeTheme(activeLang);
     restoreScrollPosition(currentPage);
     // Highlight search term if we navigated from a search result
@@ -823,19 +802,6 @@ export default function Reader({ params, searchParams }) {
     } catch (e) { console.warn('Scroll injection failed', e); }
   };
 
-  const applyZoom = () => {
-    if (iframeRef.current && iframeRef.current.contentWindow) {
-      try {
-        iframeRef.current.contentWindow.document.body.style.zoom = `${zoomLevel}%`;
-      } catch (e) {
-        console.warn('Cannot apply zoom to iframe (cross-origin or sandboxed)', e);
-      }
-    }
-    // Also apply zoom to compare pane
-    if (compareContentRef.current) {
-      compareContentRef.current.style.zoom = `${zoomLevel}%`;
-    }
-  };
 
   const handleSplitDrag = (e) => {
     e.preventDefault();
@@ -873,39 +839,37 @@ export default function Reader({ params, searchParams }) {
   };
 
   const applyIframeTheme = (currentLang = activeLang) => {
-    // Inject CSS to fix dark mode text contrast issues on legacy HTML
+    // Inject CSS to fix text contrast issues and apply dynamic typography
     if (iframeRef.current && iframeRef.current.contentWindow) {
       try {
         const doc = iframeRef.current.contentWindow.document;
-        const isDark = theme === 'dark' || (theme === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches);
+        const isDark = settings.theme === 'dark' || (settings.theme === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches);
+        const isSepia = settings.theme === 'sepia';
 
-        if (isDark) {
-          let style = doc.getElementById('dark-theme-override');
+        if (isDark || isSepia) {
+          let style = doc.getElementById('theme-override');
           if (!style) {
             style = doc.createElement('style');
-            style.id = 'dark-theme-override';
+            style.id = 'theme-override';
             doc.head.appendChild(style);
           }
-          // Force all elements to light text and no background so the body background shows through
-          style.innerHTML = `
-            html, body {
-              background-color: #1e293b !important;
-              color: #f8fafc !important;
-            }
-            p, div, span, td, th, li, a, h1, h2, h3, h4, h5, h6, font {
-              color: #e2e8f0 !important;
-              background-color: transparent !important;
-              border-color: #334155 !important;
-            }
-            table, tr, td, th {
-              border-color: #334155 !important;
-            }
-            a {
-              color: #818cf8 !important;
-            }
-          `;
+          if (isDark) {
+            style.innerHTML = `
+              html, body { background-color: #1e293b !important; color: #f8fafc !important; }
+              p, div, span, td, th, li, a, h1, h2, h3, h4, h5, h6, font { color: #e2e8f0 !important; background-color: transparent !important; border-color: #334155 !important; }
+              table, tr, td, th { border-color: #334155 !important; }
+              a { color: #818cf8 !important; }
+            `;
+          } else if (isSepia) {
+            style.innerHTML = `
+              html, body { background-color: #f4ecd8 !important; color: #5b4636 !important; }
+              p, div, span, td, th, li, a, h1, h2, h3, h4, h5, h6, font { color: #5b4636 !important; background-color: transparent !important; border-color: #c0b196 !important; }
+              table, tr, td, th { border-color: #c0b196 !important; }
+              a { color: #d97706 !important; }
+            `;
+          }
         } else {
-          const style = doc.getElementById('dark-theme-override');
+          const style = doc.getElementById('theme-override');
           if (style) style.remove();
           doc.body.style.backgroundColor = '';
           doc.body.style.color = '';
@@ -918,88 +882,56 @@ export default function Reader({ params, searchParams }) {
           doc.head.appendChild(responsiveStyle);
         }
         
-        // Use the parent window width to determine if we need mobile padding blockouts
         const isMobileView = window.innerWidth <= 1024;
-        
-        // Apply comfortable reading layout to ALL pages, native or translated
+        const ff = settings.mainFontFamily;
+        const fs = settings.mainFontSize;
+        const lh = settings.lineHeight;
+        const aff = settings.arabicFontFamily;
+        const afs = settings.arabicFontSize;
+
         responsiveStyle.innerHTML = `
-          body {
-            max-width: 800px !important;
+          /* ── Layout ── */
+          html, body {
+            max-width: 1200px !important;
             margin: 0 auto !important;
-            padding: ${isMobileView ? '80px 24px 100px 24px' : '30px 40px'} !important;
-            font-size: 115% !important;
-            line-height: 1.6 !important;
+            padding: ${isMobileView ? '80px 20px 100px 20px' : '40px 60px'} !important;
           }
-          img {
-            max-width: 100% !important;
-            height: auto !important;
-            border-radius: 8px;
+          img { max-width: 100% !important; height: auto !important; border-radius: 8px; }
+
+          /* ── Main Typography — target every element so inline styles are overridden ── */
+          body, p, div, span, li, ul, ol, td, th, blockquote, pre, h1, h2, h3, h4, h5, h6, font {
+            font-family: ${ff}, -apple-system, sans-serif !important;
           }
+          body, p, div, span, li, td, th, blockquote, pre, font {
+            font-size: ${fs}px !important;
+            line-height: ${lh} !important;
+          }
+          h1 { font-size: ${Math.round(fs * 1.8)}px !important; line-height: 1.25 !important; }
+          h2 { font-size: ${Math.round(fs * 1.5)}px !important; line-height: 1.3  !important; }
+          h3 { font-size: ${Math.round(fs * 1.25)}px !important; line-height: 1.35 !important; }
+
+          /* ── Arabic / Quranic ── */
+          [lang^="ar"], [dir="rtl"], .arabic-text, font[face*="Arabic"], font[face*="arabic"] {
+            font-family: ${aff}, serif !important;
+            font-size: ${afs}px !important;
+            line-height: 2 !important;
+          }
+          .arabic-text {
+            direction: rtl;
+            display: inline-block;
+            margin: 0 4px;
+          }
+
+          /* ── Highlight colours (injected here so iframe sees them) ── */
+          mark[data-highlight-id] { border-radius: 3px; padding: 1px 2px; cursor: pointer; transition: filter .15s; }
+          mark[data-highlight-id]:hover { filter: brightness(0.88); }
+          mark.hl-yellow { background: #fde68a !important; color: #78350f !important; }
+          mark.hl-green  { background: #a7f3d0 !important; color: #064e3b !important; }
+          mark.hl-blue   { background: #bfdbfe !important; color: #1e3a8a !important; }
+          mark.hl-pink   { background: #fbcfe8 !important; color: #831843 !important; }
+          mark.hl-purple { background: #ddd6fe !important; color: #4c1d95 !important; }
         `;
 
-        // Inject readable typography for translated content
-        const isTranslated = currentLang && currentLang !== 'tr';
-        let readableStyle = doc.getElementById('readable-typography');
-        if (isTranslated) {
-          if (!readableStyle) {
-            readableStyle = doc.createElement('style');
-            readableStyle.id = 'readable-typography';
-            doc.head.appendChild(readableStyle);
-          }
-          readableStyle.innerHTML = `
-            body {
-              font-family: 'Georgia', 'Times New Roman', 'Noto Serif', serif !important;
-              line-height: 1.85 !important;
-              padding: 20px !important;
-              max-width: 720px !important;
-              margin: 0 auto !important;
-              font-size: 18px !important;
-              letter-spacing: 0.01em !important;
-              word-spacing: 0.05em !important;
-            }
-            p, div {
-              margin-bottom: 1em !important;
-              text-align: justify !important;
-              text-justify: inter-word !important;
-            }
-            h1, h2, h3, h4, h5, h6 {
-              font-family: 'Inter', -apple-system, 'Segoe UI', sans-serif !important;
-              line-height: 1.3 !important;
-              margin-top: 1.5em !important;
-              margin-bottom: 0.6em !important;
-              text-align: left !important;
-            }
-            h1 { font-size: 1.6em !important; }
-            h2 { font-size: 1.35em !important; }
-            h3 { font-size: 1.15em !important; }
-            blockquote {
-              border-left: 3px solid #6366f1 !important;
-              padding-left: 16px !important;
-              margin: 1.2em 0 !important;
-              font-style: italic !important;
-              opacity: 0.9;
-            }
-            ul, ol {
-              padding-left: 24px !important;
-              margin-bottom: 1em !important;
-            }
-            li {
-              margin-bottom: 0.4em !important;
-            }
-            img {
-              max-width: 100% !important;
-              height: auto !important;
-              border-radius: 6px;
-            }
-            .arabic-text {
-              font-family: 'Amiri', 'Traditional Arabic', 'Scheherazade New', 'Arabic Typesetting', serif !important;
-              font-size: 2em !important;
-              line-height: 1.6 !important;
-              direction: rtl;
-              display: inline-block;
-              margin: 0 4px;
-            }
-          `;
 
           // Use a TreeWalker to safely find and wrap Arabic text in translation to make it 2x larger
           try {
@@ -1041,23 +973,20 @@ export default function Reader({ params, searchParams }) {
           } catch (err) {
             console.error('Error scaling Arabic text:', err);
           }
-        } else if (readableStyle) {
-          readableStyle.remove();
-        }
+
       } catch (e) { }
     }
   };
 
-  useEffect(() => {
-    applyZoom();
-  }, [zoomLevel]);
 
-  useEffect(() => {
-    applyIframeTheme(activeLang);
-  }, [theme, activeLang]);
+  // Re-apply iframe styles whenever settings change (font, size, theme, line-height)
+  // This effect MUST live after applyIframeTheme is defined.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => { applyIframeTheme(activeLang); }, [settings]);
 
   // If there's an active result search string, inject it into the iframe after load
   // (Optional feature, omitting for now to keep things stable)
+
 
   // Progress calculation
   const currentIndex = getCurrentIndex();
@@ -1150,138 +1079,124 @@ export default function Reader({ params, searchParams }) {
       {/* Reading Progress Bar */}
       {flattenedToc.length > 0 && (
         <div className="progress-bar-container" title={`Section ${currentIndex + 1} of ${flattenedToc.length}`}>
-          <div className="progress-bar-fill" style={{ width: `${progressPercent}%` }} />
+          <div className="progress-bar" style={{ width: `${progressPercent}%` }} />
         </div>
       )}
 
       {/* Sidebar */}
-      <aside className={`sidebar ${sidebarOpen ? 'open' : 'closed'}`}>
-        <div className="sidebar-header glass-panel">
-          <Link href="/" className="back-button">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="19" y1="12" x2="5" y2="12"></line><polyline points="12 19 5 12 12 5"></polyline></svg>
-            <span>Library</span>
-          </Link>
-          <button
-            className="icon-button close-sidebar-btn"
-            onClick={() => setSidebarOpen(false)}
-            title="Close Sidebar"
-          >
-            ✕
-          </button>
-        </div>
-
-        <div className="sidebar-content">
-          <h2 className="book-title-sidebar">{book.replace('.chm', '')}</h2>
+      <aside className={`reader-sidebar ${sidebarOpen ? '' : 'sidebar-closed'}`}>
+        <div className="sidebar-header">
+          <div className="sidebar-title-row">
+            <span className="sidebar-book-title">{book.replace('.chm', '')}</span>
+            <button className="sidebar-close-btn" onClick={() => setSidebarOpen(false)} title="Close">✕</button>
+          </div>
 
           <div className="sidebar-tabs">
             <button className={`sidebar-tab ${sidebarTab === 'toc' ? 'active' : ''}`} onClick={() => setSidebarTab('toc')}>
-              📖 Contents
+              Contents
             </button>
             <button className={`sidebar-tab ${sidebarTab === 'bookmarks' ? 'active' : ''}`} onClick={() => setSidebarTab('bookmarks')}>
-              ⭐ Bookmarks {bookmarks.length > 0 && <span className="bookmark-count">{bookmarks.length}</span>}
+              Bookmarks {bookmarks.filter(b => b.book === book).length > 0 && `(${bookmarks.filter(b=>b.book===book).length})`}
             </button>
           </div>
 
+          {sidebarTab === 'toc' && (
+            <div className="sidebar-search">
+              <span className="toc-filter-icon">⌕</span>
+              <input
+                className="toc-filter-input"
+                type="text"
+                placeholder="Filter chapters…"
+                value={tocFilter}
+                onChange={e => setTocFilter(e.target.value)}
+              />
+            </div>
+          )}
+        </div>
+
+        <div className="sidebar-body">
           {sidebarTab === 'toc' ? (
-            <>
-              {/* TOC Filter */}
-              <div className="toc-filter-wrap">
-                <input
-                  className="toc-filter-input"
-                  type="text"
-                  placeholder="Filter chapters..."
-                  value={tocFilter}
-                  onChange={e => setTocFilter(e.target.value)}
-                />
-                {tocFilter && <button className="toc-filter-clear" onClick={() => setTocFilter('')}>✕</button>}
+            loading ? (
+              <div style={{display:'flex',justifyContent:'center',padding:'24px'}}>
+                <div className="loader small" />
               </div>
-              {loading ? (
-                <div className="loader-container-small">
-                  <div className="loader small"></div>
-                </div>
-              ) : error ? (
-                <div className="error-text">Failed to load content</div>
-              ) : (
-                <ul className="toc-list root-list">
-                  {filteredToc.map((item, index) => (
-                    <TocNode
-                      key={index}
-                      item={item}
-                      cacheUrl={cacheUrl}
-                      setCurrentPage={(page) => { saveScrollPosition(); setIframeLoading(true); setCurrentPage(page); setSidebarOpen(false); }}
-                      currentPage={currentPage}
-                      expandedPaths={expandedPaths}
-                      onToggleExpand={onToggleExpand}
-                      nodePath={`/${index}`}
-                    />
-                  ))}
-                </ul>
-              )}
-            </>
+            ) : error ? (
+              <div style={{padding:'12px',color:'var(--danger)',fontFamily:'var(--font-ui)',fontSize:'0.8rem'}}>Failed to load content</div>
+            ) : (
+              <ul className="toc-list">
+                {filteredToc.map((item, index) => (
+                  <TocNode
+                    key={index}
+                    item={item}
+                    cacheUrl={cacheUrl}
+                    setCurrentPage={(page) => { saveScrollPosition(); setIframeLoading(true); setCurrentPage(page); setSidebarOpen(window.innerWidth > 1024); }}
+                    currentPage={currentPage}
+                    expandedPaths={expandedPaths}
+                    onToggleExpand={onToggleExpand}
+                    nodePath={`/${index}`}
+                  />
+                ))}
+              </ul>
+            )
           ) : (
-            <div className="bookmarks-list">
+            <div>
               {bookmarks.length === 0 ? (
-                <div className="empty-bookmarks">
-                  <p>No bookmarks yet</p>
-                  <p className="text-small">Click the ⭐ button in the toolbar to bookmark the current page</p>
+                <div style={{padding:'24px 12px',textAlign:'center',fontFamily:'var(--font-ui)'}}>
+                  <div style={{fontSize:'2rem',marginBottom:'10px'}}>🔖</div>
+                  <p style={{fontSize:'0.8rem',color:'var(--text-muted)'}}>No bookmarks yet.<br/>Tap ☆ to bookmark a page.</p>
                 </div>
               ) : (
-                bookmarks.map((bm, i) => (
-                  <button
-                    key={i}
-                    className={`bookmark-item ${currentPage && currentPage.includes(bm.url) ? 'active' : ''}`}
-                    onClick={() => setCurrentPage(bm.page)}
-                  >
-                    <span className="bookmark-title">{bm.title}</span>
-                    <button
-                      className="bookmark-remove"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        const updated = bookmarks.filter((_, idx) => idx !== i);
-                        setBookmarks(updated);
-                        localStorage.setItem(`bookmarks_${book}`, JSON.stringify(updated));
-                      }}
-                    >
-                      ✕
-                    </button>
-                  </button>
+                bookmarks.map(bm => (
+                  <div key={bm.id} className="bookmark-item" onClick={() => { if(bm.pageUrl) setCurrentPage(`${cacheUrl}/${bm.pageUrl.split('/').pop()}`); }}>
+                    <div style={{flex:1,minWidth:0}}>
+                      <div className="bookmark-item-text">{bm.pageTitle || 'Untitled'}</div>
+                      <div className="bookmark-item-book">{bm.bookTitle || bm.book}</div>
+                    </div>
+                    <button className="bookmark-delete" onClick={e => { e.stopPropagation(); removeBookmark(bm.id); }} title="Remove">×</button>
+                  </div>
                 ))
               )}
             </div>
           )}
         </div>
+
+        <div className="sidebar-footer">
+          <Link href="/profile" className="sidebar-profile-link">
+            <div className="sidebar-profile-avatar">
+              {user ? user.username[0].toUpperCase() : '?'}
+            </div>
+            <span>{user ? user.username : 'Sign in to sync'}</span>
+          </Link>
+        </div>
       </aside>
 
       {/* Main Content Area */}
-      <main className="main-content">
+      <main className="reader-main">
         {/* Top Toolbar */}
-        <div className="reader-toolbar glass-panel desktop-only-toolbar">
+        <div className="reader-toolbar desktop-only">
           <div className="toolbar-left">
             {!sidebarOpen && (
-              <button
-                className="icon-button primary sidebar-toggle"
-                onClick={() => setSidebarOpen(true)}
-                title="Open Sidebar"
-              >
-                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="3" y1="12" x2="21" y2="12"></line><line x1="3" y1="6" x2="21" y2="6"></line><line x1="3" y1="18" x2="21" y2="18"></line></svg>
+              <button className="icon-button" onClick={() => setSidebarOpen(true)} title="Open Sidebar">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="3" y1="12" x2="21" y2="12"></line><line x1="3" y1="6" x2="21" y2="6"></line><line x1="3" y1="18" x2="21" y2="18"></line></svg>
               </button>
             )}
-            <div className="mobile-header-title">{book.replace('.chm', '')}</div>
+            <Link href="/" style={{display:'flex',alignItems:'center',gap:'5px',padding:'5px 10px',borderRadius:'8px',background:'var(--surface)',boxShadow:'var(--shadow-neu-sm)',textDecoration:'none',color:'var(--text-muted)',fontFamily:'var(--font-ui)',fontSize:'0.75rem',fontWeight:700}}>
+              ← Library
+            </Link>
+          </div>
 
-            <div className="search-container">
-              <div className="local-search-form">
-                <input
-                  type="text"
-                  placeholder="Find in book..."
-                  value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
-                  className="toolbar-input"
-                />
-                {(searchQuery || isSearching) && (
-                  <button type="button" className="clear-search-btn" onClick={() => setSearchQuery('')}>✕</button>
-                )}
-              </div>
-
+          <div className="toolbar-center">
+            <div className="book-search-wrapper">
+              <input
+                type="text"
+                placeholder="Find in book…"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                className="toolbar-input"
+              />
+              {(searchQuery || isSearching) && (
+                <button type="button" className="clear-search-btn" onClick={() => setSearchQuery('')}>✕</button>
+              )}
               {/* Dropdown Results */}
               {searchResults !== null && (
                 <div className="book-search-results glass-panel">
@@ -1300,7 +1215,7 @@ export default function Reader({ params, searchParams }) {
                             const query = searchQuery;
                             setCurrentPage(res.directUrl || res.link);
                             pendingHighlightRef.current = query;
-                            setSearchQuery(''); // Close panel on select
+                            setSearchQuery('');
                             setIsSearchModalOpen(false);
                             if (iframeRef.current && iframeRef.current.contentWindow) {
                               iframeRef.current.contentWindow.focus();
@@ -1313,10 +1228,7 @@ export default function Reader({ params, searchParams }) {
                       ))
                     )}
                     {!isSearching && searchResults.length > 10 && (
-                      <button
-                        className="show-more-btn"
-                        onClick={() => setIsSearchModalOpen(true)}
-                      >
+                      <button className="show-more-btn" onClick={() => setIsSearchModalOpen(true)}>
                         Show all {searchResults.length} results
                       </button>
                     )}
@@ -1333,147 +1245,50 @@ export default function Reader({ params, searchParams }) {
                 onClick={navigatePrev}
                 disabled={getCurrentIndex() <= 0}
                 title="Previous Section (←)"
-              >
-                ◀
-              </button>
+              >◀</button>
               <button
                 className="icon-button"
                 onClick={navigateNext}
                 disabled={getCurrentIndex() === -1 || getCurrentIndex() >= flattenedToc.length - 1}
                 title="Next Section (→)"
-              >
-                ▶
-              </button>
+              >▶</button>
             </div>
 
-            <button
-              className="icon-button random-btn"
-              onClick={handleRandomSection}
-              disabled={flattenedToc.length === 0}
-              title="Random Section"
-            >
-              🎲
-            </button>
+            <button className="icon-button random-btn" onClick={handleRandomSection} disabled={flattenedToc.length === 0} title="Random Section">🎲</button>
 
             <div className="translate-controls">
-              <button
-                className={`lang-btn ${activeLang === 'tr' ? 'active' : ''}`}
-                onClick={() => handleTranslate('tr')}
-                disabled={isTranslating || activeLang === 'tr'}
-                title="Original Turkish"
-              >
-                🇹🇷 TR
-              </button>
-              <button
-                className={`lang-btn ${activeLang === 'ru' ? 'active' : ''}`}
-                onClick={() => handleTranslate('ru')}
-                disabled={isTranslating}
-                title="Translate to Russian"
-              >
+              <button className={`lang-btn ${activeLang === 'tr' ? 'active' : ''}`} onClick={() => handleTranslate('tr')} disabled={isTranslating || activeLang === 'tr'} title="Original Turkish">🇹🇷 TR</button>
+              <button className={`lang-btn ${activeLang === 'ru' ? 'active' : ''}`} onClick={() => handleTranslate('ru')} disabled={isTranslating} title="Translate to Russian">
                 {isTranslating && activeLang === 'ru' ? '⏳' : `🇷🇺 RU${translationCacheRef.current['ru'] ? ' ✓' : ''}`}
               </button>
-              <button
-                className={`lang-btn ${activeLang === 'kk' ? 'active' : ''}`}
-                onClick={() => handleTranslate('kk')}
-                disabled={isTranslating}
-                title="Translate to Kazakh"
-              >
+              <button className={`lang-btn ${activeLang === 'kk' ? 'active' : ''}`} onClick={() => handleTranslate('kk')} disabled={isTranslating} title="Translate to Kazakh">
                 {isTranslating && activeLang === 'kk' ? '⏳' : `🇰🇿 KZ${translationCacheRef.current['kk'] ? ' ✓' : ''}`}
               </button>
             </div>
 
-            <button
-              className={`icon-button ${isBookmarked() ? 'primary bookmark-active' : ''}`}
-              onClick={toggleBookmark}
-              title={isBookmarked() ? 'Remove Bookmark' : 'Bookmark this page'}
-            >
+            <button className={`icon-button ${isBookmarked() ? 'primary bookmark-active' : ''}`} onClick={toggleBookmark} title={isBookmarked() ? 'Remove Bookmark' : 'Bookmark this page'}>
               {isBookmarked() ? '⭐' : '☆'}
             </button>
 
-              <button
-                className={`icon-button ${compareMode ? 'primary' : ''}`}
-                onClick={toggleCompareMode}
-                disabled={activeLang === 'tr'}
-                title="Compare Side-by-Side"
-              >
-                ⚖️
-              </button>
+            <button className={`icon-button ${compareMode ? 'primary' : ''}`} onClick={toggleCompareMode} disabled={activeLang === 'tr'} title="Compare Side-by-Side">⚖️</button>
 
-            {/* Edit / Save / Cancel */}
             {!isEditing ? (
-              <button
-                className="icon-button"
-                onClick={startEditing}
-                disabled={activeLang === 'tr'}
-                title="Edit Translation"
-              >
-                ✏️
-              </button>
+              <button className="icon-button" onClick={startEditing} disabled={activeLang === 'tr'} title="Edit Translation">✏️</button>
             ) : (
               <>
-                <button
-                  className="icon-button primary"
-                  onClick={saveTranslation}
-                  disabled={isSaving}
-                  title="Save Translation"
-                >
-                  {isSaving ? '⏳' : '💾'}
-                </button>
-                <button
-                  className="icon-button"
-                  onClick={cancelEditing}
-                  title="Cancel Edit"
-                >
-                  ❌
-                </button>
+                <button className="icon-button primary" onClick={saveTranslation} disabled={isSaving} title="Save Translation">{isSaving ? '⏳' : '💾'}</button>
+                <button className="icon-button" onClick={cancelEditing} title="Cancel Edit">❌</button>
               </>
             )}
 
-            <div className="ai-controls">
-              <button
-                className="icon-button ai-btn"
-                onClick={() => setShowAiPanel(true)}
-                title="Open AI Study Hub"
-              >
-                🧠 <span className="tooltip">AI Hub</span>
-              </button>
-            </div>
+            <button className="icon-button ai-btn" onClick={() => setShowAiPanel(true)} title="Open AI Study Hub">
+              🧠 <span className="tooltip">AI Hub</span>
+            </button>
 
-            <div className="zoom-controls">
-              <button className="icon-button" onClick={() => setZoomLevel(z => Math.max(50, z - 10))} title="Zoom Out">
-                A-
-              </button>
-              <span className="zoom-level">{zoomLevel}%</span>
-              <button className="icon-button" onClick={() => setZoomLevel(z => Math.min(200, z + 10))} title="Zoom In">
-                A+
-              </button>
-            </div>
-
-            <div className="theme-controls">
-              <button
-                className={`theme-btn ${theme === 'light' ? 'active' : ''}`}
-                onClick={() => setTheme('light')}
-                title="Light Mode"
-              >
-                ☀️
-              </button>
-              <button
-                className={`theme-btn ${theme === 'dark' ? 'active' : ''}`}
-                onClick={() => setTheme('dark')}
-                title="Dark Mode"
-              >
-                🌙
-              </button>
-              <button
-                className={`theme-btn ${theme === 'system' ? 'active' : ''}`}
-                onClick={() => setTheme('system')}
-                title="System Theme"
-              >
-                💻
-              </button>
-            </div>
+            <ReaderSettings />
           </div>
         </div>
+
 
         {/* PREMIUM MOBILE UI - TOP BAR */}
         <div className={`mobile-premium-top-bar glass-panel mobile-only ${!isNavVisible ? 'nav-hidden-top' : ''}`}>
@@ -1553,7 +1368,7 @@ export default function Reader({ params, searchParams }) {
               <iframe
                 ref={iframeRef}
                 src={currentPage}
-                className={`content-iframe ${theme === 'dark' ? 'dark-iframe-bg' : ''} ${iframeLoading ? 'iframe-loading' : ''}`}
+                className={`content-iframe ${settings.theme === 'dark' ? 'dark-iframe-bg' : ''} ${iframeLoading ? 'iframe-loading' : ''}`}
                 title="Book Content"
                 onLoad={handleIframeLoad}
                 sandbox="allow-same-origin allow-scripts allow-popups allow-forms"
@@ -1595,7 +1410,7 @@ export default function Reader({ params, searchParams }) {
                   {/* Editable / Read-only content */}
                   <div
                     ref={el => { compareContentRef.current = el; if (isEditing) editorRef.current = el; }}
-                    className={`compare-content ${theme === 'dark' ? 'compare-dark' : ''} ${isEditing ? 'editor-active' : ''}`}
+                    className={`compare-content ${settings.theme === 'dark' ? 'compare-dark' : ''} ${isEditing ? 'editor-active' : ''}`}
                     contentEditable={isEditing}
                     suppressContentEditableWarning
                     dangerouslySetInnerHTML={{ __html: compareHtml }}
@@ -1749,14 +1564,14 @@ export default function Reader({ params, searchParams }) {
              
              <div className="sheet-section">
                <div className="sheet-row">
-                 <button className="sheet-btn" onClick={() => setZoomLevel(z => Math.max(50, z - 10))}>A-</button>
-                 <span className="sheet-val">{zoomLevel}%</span>
-                 <button className="sheet-btn" onClick={() => setZoomLevel(z => Math.min(200, z + 10))}>A+</button>
+                 <button className="sheet-btn" onClick={() => updateSettings({ mainFontSize: Math.max(12, settings.mainFontSize - 2) })}>A-</button>
+                 <span className="sheet-val">{settings.mainFontSize}px</span>
+                 <button className="sheet-btn" onClick={() => updateSettings({ mainFontSize: Math.min(32, settings.mainFontSize + 2) })}>A+</button>
                </div>
                <div className="sheet-row theme-toggles">
-                 <button className={`sheet-btn ${theme === 'light' ? 'active' : ''}`} onClick={() => setTheme('light')}>☀️ Light</button>
-                 <button className={`sheet-btn ${theme === 'dark' ? 'active' : ''}`} onClick={() => setTheme('dark')}>🌙 Dark</button>
-                 <button className={`sheet-btn ${theme === 'system' ? 'active' : ''}`} onClick={() => setTheme('system')}>💻 Auto</button>
+                 <button className={`sheet-btn ${settings.theme === 'light' ? 'active' : ''}`} onClick={() => updateSettings({ theme: 'light' })}>☀️ Light</button>
+                 <button className={`sheet-btn ${settings.theme === 'dark' ? 'active' : ''}`} onClick={() => updateSettings({ theme: 'dark' })}>🌙 Dark</button>
+                 <button className={`sheet-btn ${settings.theme === 'sepia' ? 'active' : ''}`} onClick={() => updateSettings({ theme: 'sepia' })}>☕ Sepia</button>
                </div>
              </div>
 
@@ -1787,1557 +1602,264 @@ export default function Reader({ params, searchParams }) {
         </div>
       )}
 
+      {/* Highlighter Component */}
+      <Highlighter iframeRef={iframeRef} currentPage={currentPage} bookId={book.replace('.chm', '')} />
+
       <style jsx global>{`
-        .reader-layout {
-          display: flex;
-          height: 100vh;
-          overflow: hidden;
-          background-color: var(--background);
-          position: relative;
-        }
+        /* ── Layout ── */
+        .reader-layout { display:flex; height:100vh; overflow:hidden; background:var(--surface); position:relative; font-family:var(--font-ui); }
 
-        .progress-bar-container {
-          position: fixed;
-          top: 0;
-          left: 0;
-          right: 0;
-          height: 3px;
-          background: var(--card-border);
-          z-index: 1000;
-          cursor: pointer;
-        }
+        /* ── Progress bar ── */
+        .progress-bar-container { position:fixed; top:0; left:0; right:0; height:3px; z-index:9999; background:var(--surface-down); }
+        .progress-bar { height:100%; background:linear-gradient(90deg,var(--primary),#00a0a0); transition:width 0.4s ease; }
 
-        .progress-bar-fill {
-          height: 100%;
-          background: linear-gradient(90deg, var(--primary), #a78bfa);
-          transition: width 0.3s ease;
-          border-radius: 0 2px 2px 0;
+        /* ── Sidebar ── */
+        .reader-sidebar {
+          width:var(--sidebar-width); min-width:var(--sidebar-width);
+          height:100vh; display:flex; flex-direction:column;
+          background:var(--surface);
+          box-shadow:4px 0 20px var(--neu-dark), -1px 0 0 var(--neu-light);
+          z-index:200; transition:transform 0.28s cubic-bezier(.4,0,.2,1);
+          position:relative;
         }
-        
-        .sidebar {
-          width: 320px;
-          flex-shrink: 0;
-          background-color: var(--sidebar-bg);
-          backdrop-filter: blur(24px) saturate(180%);
-          -webkit-backdrop-filter: blur(24px) saturate(180%);
-          border-right: 1px solid var(--card-border);
-          display: flex;
-          flex-direction: column;
-          transition: transform 0.35s cubic-bezier(0.25, 0.46, 0.45, 0.94);
-          z-index: 30;
-        }
-        
-        .sidebar.closed {
-          transform: translateX(-100%);
-          position: absolute;
-          height: 100%;
-          box-shadow: none;
-        }
+        .sidebar-closed { transform:translateX(-100%); position:absolute; }
 
-        .sidebar.open {
-          box-shadow: var(--shadow-xl);
-        }
-        
         .sidebar-header {
-          padding: 0.875rem 1.25rem;
-          display: flex;
-          justify-content: space-between;
-          align-items: center;
-          height: 56px;
-          border-bottom: 1px solid var(--card-border);
+          padding:18px 16px 12px;
+          border-bottom:1px solid var(--surface-border);
+          display:flex; flex-direction:column; gap:10px;
         }
-        
-        .back-button {
-          color: var(--text-muted);
-          font-weight: 500;
-          font-size: 0.9rem;
-          transition: all 0.2s;
-          display: flex;
-          align-items: center;
-          gap: 0.4rem;
-        }
-        
-        .back-button:hover {
-          color: var(--primary);
-        }
+        .sidebar-title-row { display:flex; align-items:center; justify-content:space-between; }
+        .sidebar-book-title { font-size:0.8rem; font-weight:700; color:var(--primary); letter-spacing:0.06em; text-transform:uppercase; font-family:var(--font-ui); flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+        .sidebar-close-btn { width:28px;height:28px;border-radius:8px;border:none;background:var(--surface);box-shadow:var(--shadow-neu-sm);color:var(--text-muted);cursor:pointer;display:flex;align-items:center;justify-content:center;font-size:14px;flex-shrink:0; }
 
-        
-        .book-title-sidebar {
-          font-size: 1.1rem;
-          font-weight: 700;
-          margin-bottom: 1.5rem;
-          color: var(--primary);
-          word-wrap: break-word;
-          line-height: 1.35;
-          letter-spacing: -0.01em;
-          padding-bottom: 1rem;
-          border-bottom: 1px solid var(--card-border);
-        }
-        
-        .toc-list {
-          list-style: none;
-          padding: 0;
-          margin: 0;
-        }
+        /* Sidebar tabs */
+        .sidebar-tabs { display:flex;gap:6px;padding:4px;background:var(--surface-down);border-radius:10px; }
+        .sidebar-tab { flex:1;padding:7px;border:none;border-radius:7px;font-family:var(--font-ui);font-size:0.72rem;font-weight:700;cursor:pointer;background:transparent;color:var(--text-muted);transition:all 0.15s;letter-spacing:0.04em; }
+        .sidebar-tab.active { background:var(--surface);box-shadow:var(--shadow-neu-sm);color:var(--primary); }
 
-        .root-list {
-          margin-left: -0.75rem;
-        }
-        
-        .toc-item {
-          margin-bottom: 2px;
-        }
+        .sidebar-search { position:relative; }
+        .toc-filter-input { width:100%;padding:8px 12px 8px 32px;border:none;border-radius:8px;background:var(--surface);box-shadow:var(--shadow-neu-in);font-family:var(--font-ui);font-size:0.8rem;color:var(--text);outline:none; }
+        .toc-filter-icon { position:absolute;left:10px;top:50%;transform:translateY(-50%);color:var(--text-faint);font-size:13px; }
 
-        .toc-item-header {
-          display: flex;
-          align-items: center;
-          gap: 2px;
-          border-radius: var(--radius-sm);
-          transition: all 0.15s ease;
-          position: relative;
-          padding: 3px 0;
-        }
+        .sidebar-body { flex:1;overflow-y:auto;padding:8px 8px 20px; }
 
-        .toc-item-header:hover {
-          background-color: var(--card-hover);
-        }
+        /* TOC items */
+        .toc-list { list-style:none;margin:0;padding:0; }
+        .toc-item { margin:1px 0; }
+        .toc-item-header { display:flex;align-items:center;gap:2px;border-radius:8px;transition:background 0.12s; }
+        .toc-item-header:hover { background:var(--surface-up); }
+        .toc-item-header.active-node { background:var(--primary-light);box-shadow:var(--shadow-neu-sm-in); }
+        .active-node .toc-button { color:var(--primary)!important;font-weight:700; }
 
-        .toc-item-header.active-node {
-          background: var(--primary-glow);
-          border-left: 2.5px solid var(--primary);
-        }
-        
-        .toc-item-header.active-node .toc-text {
-          color: var(--primary);
-          font-weight: 600;
-        }
+        .toc-toggle { width:22px;height:22px;border:none;background:none;cursor:pointer;color:var(--text-faint);font-size:11px;display:flex;align-items:center;justify-content:center;border-radius:4px;flex-shrink:0;transition:transform 0.15s; }
+        .toc-toggle:hover { color:var(--primary); }
+        .toc-toggle-spacer { width:22px;flex-shrink:0; }
 
-        .toc-toggle {
-          background: none;
-          border: none;
-          color: var(--text-muted);
-          cursor: pointer;
-          font-size: 0.65rem;
-          padding: 4px;
-          width: 24px;
-          height: 24px;
-          display: flex;
-          align-items: center;
-          justify-content: center;
-          border-radius: var(--radius-sm);
-          transition: all 0.15s;
-          opacity: 0.6;
-        }
+        .toc-button { flex:1;display:flex;align-items:center;gap:6px;padding:6px 6px;border:none;background:none;cursor:pointer;color:var(--text);font-family:var(--font-ui);font-size:0.78rem;text-align:left;border-radius:7px;transition:color 0.12s;min-width:0; }
+        .toc-button:hover { color:var(--primary); }
+        .toc-folder { color:var(--text-muted); }
+        .toc-icon { font-size:12px;flex-shrink:0; }
+        .toc-text { overflow:hidden;text-overflow:ellipsis;white-space:nowrap; }
+        .sub-list { margin-left:14px;border-left:1.5px solid var(--surface-border);padding-left:4px; }
 
-        .toc-toggle:hover {
-          background-color: var(--card-border);
-          color: var(--text-primary);
-          opacity: 1;
-        }
+        /* Bookmarks in sidebar */
+        .bookmark-item { display:flex;align-items:center;gap:8px;padding:8px 10px;border-radius:10px;background:var(--surface);box-shadow:var(--shadow-neu-sm);margin-bottom:6px;cursor:pointer;transition:box-shadow 0.15s; }
+        .bookmark-item:hover { box-shadow:var(--shadow-neu-out); }
+        .bookmark-item-text { flex:1;font-size:0.78rem;color:var(--text);font-family:var(--font-ui);overflow:hidden;text-overflow:ellipsis;white-space:nowrap; }
+        .bookmark-item-book { font-size:0.68rem;color:var(--text-muted);margin-top:2px; }
+        .bookmark-delete { width:22px;height:22px;border:none;background:none;color:var(--text-faint);cursor:pointer;font-size:14px;border-radius:4px;display:flex;align-items:center;justify-content:center; }
+        .bookmark-delete:hover { color:var(--danger); }
 
-        .toc-toggle-spacer {
-          width: 24px;
-          height: 24px;
-          flex-shrink: 0;
-        }
-        
-        .toc-button {
-          flex-grow: 1;
-          display: flex;
-          align-items: flex-start;
-          gap: 8px;
-          text-align: left;
-          background: transparent !important;
-          border: none !important;
-          outline: none !important;
-          box-shadow: none !important;
-          color: var(--text-primary);
-          padding: 0.4rem 0.5rem;
-          border-radius: var(--radius-sm);
-          cursor: pointer;
-          font-family: inherit;
-          font-size: 0.88rem;
-          line-height: 1.45;
-          transition: color 0.15s;
-        }
+        /* Profile link in sidebar footer */
+        .sidebar-footer { padding:10px 12px;border-top:1px solid var(--surface-border); }
+        .sidebar-profile-link { display:flex;align-items:center;gap:8px;padding:8px 10px;border-radius:10px;background:var(--surface);box-shadow:var(--shadow-neu-sm);text-decoration:none;color:var(--text);font-family:var(--font-ui);font-size:0.78rem;font-weight:700;transition:box-shadow 0.15s; }
+        .sidebar-profile-link:hover { box-shadow:var(--shadow-neu-out);color:var(--primary); }
+        .sidebar-profile-avatar { width:28px;height:28px;border-radius:50%;background:var(--primary);color:#fff;display:flex;align-items:center;justify-content:center;font-size:0.75rem;font-weight:700;flex-shrink:0; }
 
-        .toc-button:hover {
-          color: var(--primary);
-        }
+        /* ── Main content area ── */
+        .reader-main { flex:1;display:flex;flex-direction:column;overflow:hidden;position:relative; }
 
-        .toc-folder {
-          font-weight: 500;
-        }
-        
-        .toc-icon {
-          font-size: 1em;
-          flex-shrink: 0;
-          margin-top: 2px;
-        }
-        
-        .main-content {
-          flex-grow: 1;
-          position: relative;
-          display: flex;
-          flex-direction: column;
-          background-color: var(--background);
-        }
-
+        /* ── Toolbar ── */
         .reader-toolbar {
-          height: 56px;
-          display: flex;
-          align-items: center;
-          justify-content: space-between;
-          padding: 0 1rem;
-          flex-shrink: 0;
-          z-index: 20;
-          gap: 0.5rem;
+          height:52px;display:flex;align-items:center;gap:8px;padding:0 14px;
+          background:var(--surface-up);
+          box-shadow:0 2px 12px var(--neu-dark),0 -1px 0 var(--neu-light);
+          z-index:100;flex-shrink:0;
         }
-
-        .toolbar-left, .toolbar-right {
-          display: flex;
-          align-items: center;
-          gap: 0.5rem;
-        }
+        .toolbar-left { display:flex;align-items:center;gap:6px;flex-shrink:0; }
+        .toolbar-center { flex:1;display:flex;align-items:center;justify-content:center;max-width:520px;margin:0 auto; }
+        .toolbar-right { display:flex;align-items:center;gap:6px;flex-shrink:0; }
 
         .icon-button {
-          background: transparent;
-          border: 1px solid transparent;
-          color: var(--text-muted);
-          width: 34px;
-          height: 34px;
-          border-radius: var(--radius-sm);
-          display: flex;
-          align-items: center;
-          justify-content: center;
-          cursor: pointer;
-          transition: all 0.2s ease;
-          font-weight: 600;
-          font-size: 0.9rem;
+          width:34px;height:34px;border-radius:9px;border:none;
+          background:var(--surface);box-shadow:var(--shadow-neu-sm);
+          color:var(--text);cursor:pointer;display:flex;align-items:center;justify-content:center;
+          font-size:14px;transition:all 0.15s;flex-shrink:0;font-family:var(--font-ui);
         }
+        .icon-button:hover { box-shadow:var(--shadow-neu-out);color:var(--primary); }
+        .icon-button:active { box-shadow:var(--shadow-neu-in);transform:scale(0.96); }
+        .icon-button:disabled { opacity:0.4;cursor:not-allowed;box-shadow:none; }
+        .icon-button.primary { background:var(--primary);color:#fff;box-shadow:3px 3px 10px rgba(0,102,102,0.3); }
+        .icon-button.primary:hover { background:var(--primary-hover); }
+        .icon-button.bookmark-active { color:#f59e0b; }
 
-        .icon-button:hover {
-          background: var(--card-hover);
-          color: var(--text-primary);
-        }
-
-        .icon-button.primary {
-          color: var(--primary);
-          background: var(--primary-glow);
-        }
-        
-        .icon-button.primary:hover {
-          background: rgba(129, 140, 248, 0.2);
-        }
-
-        .search-container {
-          position: relative;
-        }
-
-        .local-search-form {
-          display: flex;
-          align-items: center;
-          background: var(--card-bg);
-          border: 1px solid var(--card-border);
-          border-radius: var(--radius-sm);
-          padding: 1px 4px;
-          box-shadow: var(--shadow-sm);
-          width: 220px;
-          transition: all 0.2s;
-        }
-
-        .local-search-form:focus-within {
-          border-color: var(--primary);
-          box-shadow: 0 0 0 3px var(--primary-glow);
-        }
-
+        /* Search input */
+        .book-search-wrapper { position:relative;display:flex;align-items:center;width:100%; }
         .toolbar-input {
-          background: transparent;
-          border: none;
-          padding: 0.4rem 0.25rem 0.4rem 0.6rem;
-          color: var(--text-primary);
-          font-family: var(--font-inter);
-          flex-grow: 1;
-          font-size: 0.85rem;
-          width: 100%;
-        }
-
-        .toolbar-input:focus {
-          outline: none;
-        }
-
-        .toolbar-input::placeholder {
-          color: var(--text-muted);
-          opacity: 0.7;
-        }
-
-        .clear-search-btn {
-          background: none;
-          border: none;
-          color: var(--text-muted);
-          cursor: pointer;
-          padding: 0.4rem;
-          font-size: 0.85rem;
-          display: flex;
-          align-items: center;
-          justify-content: center;
-          transition: color 0.2s;
-          border-radius: var(--radius-sm);
-        }
-
-        .clear-search-btn:hover {
-          color: var(--text-primary);
-          background: var(--card-hover);
-        }
-
-        .book-search-results {
-          position: absolute;
-          top: calc(100% + 6px);
-          left: 0;
-          width: 420px;
-          max-height: 460px;
-          display: flex;
-          flex-direction: column;
-          border: 1px solid var(--card-border);
-          border-radius: var(--radius-md);
-          box-shadow: var(--shadow-xl);
-          overflow: hidden;
-          z-index: 50;
-          background: var(--background);
-        }
-
-        .search-results-header {
-          padding: 0.6rem 1rem;
-          border-bottom: 1px solid var(--card-border);
-          background: var(--card-bg);
-        }
-
-        .search-results-header h4 {
-          font-size: 0.82rem;
-          margin: 0;
-          display: flex;
-          align-items: center;
-          gap: 0.5rem;
-          color: var(--text-muted);
-          font-weight: 600;
-          text-transform: uppercase;
-          letter-spacing: 0.03em;
-        }
-
-        .search-spinner-small {
-          width: 14px;
-          height: 14px;
-          border: 2px solid var(--card-border);
-          border-bottom-color: var(--primary);
-          border-radius: 50%;
-          display: inline-block;
-          animation: rotation 0.8s linear infinite;
-        }
-
-        .search-results-list-small {
-          overflow-y: auto;
-          max-height: 400px;
-          display: flex;
-          flex-direction: column;
-        }
-
-        .no-results {
-          padding: 2rem;
-          text-align: center;
-          color: var(--text-muted);
-          font-size: 0.88rem;
-        }
-
-        .search-result-item {
-          background: transparent;
-          border: none;
-          border-bottom: 1px solid var(--card-border);
-          padding: 0.875rem 1rem;
-          text-align: left;
-          cursor: pointer;
-          transition: all 0.15s;
-        }
-
-        .search-result-item:last-child {
-          border-bottom: none;
-        }
-
-        .search-result-item:hover {
-          background-color: var(--card-hover);
-        }
-
-        .res-file {
-          font-size: 0.78rem;
-          color: var(--primary);
-          font-weight: 600;
-          margin-bottom: 0.2rem;
-          letter-spacing: -0.01em;
-        }
-
-        .res-snippet {
-          font-size: 0.83rem;
-          color: var(--text-muted);
-          line-height: 1.45;
-          display: -webkit-box;
-          -webkit-line-clamp: 2;
-          -webkit-box-orient: vertical;
-          overflow: hidden;
-        }
-
-        .res-snippet :global(strong) {
-          background-color: var(--primary-glow);
-          color: var(--primary);
-          padding: 1px 4px;
-          border-radius: 3px;
-        }
-
-        .zoom-controls, .nav-controls {
-          display: flex;
-          align-items: center;
-          background: var(--card-bg);
-          border: 1px solid var(--card-border);
-          border-radius: var(--radius-sm);
-          padding: 2px;
-          gap: 1px;
-        }
-
-        .icon-button:disabled {
-          opacity: 0.25;
-          cursor: not-allowed;
-        }
-
-        .icon-button:disabled:hover {
-          background: transparent;
-          color: var(--text-muted);
-        }
-
-        .zoom-level {
-          font-size: 0.8rem;
-          font-weight: 600;
-          color: var(--text-muted);
-          width: 44px;
-          text-align: center;
-          font-variant-numeric: tabular-nums;
-        }
-
-        .show-more-btn {
-          width: 100%;
-          padding: 0.875rem;
-          background: var(--primary-glow);
-          color: var(--primary);
-          border: none;
-          border-top: 1px solid var(--card-border);
-          font-weight: 600;
-          font-size: 0.85rem;
-          cursor: pointer;
-          transition: all 0.2s;
-          text-align: center;
-        }
-
-        .show-more-btn:hover {
-          background: rgba(129, 140, 248, 0.25);
-        }
-
-        .search-modal-overlay {
-          position: fixed;
-          inset: 0;
-          background: rgba(0, 0, 0, 0.55);
-          backdrop-filter: blur(8px) saturate(150%);
-          -webkit-backdrop-filter: blur(8px) saturate(150%);
-          z-index: 100;
-          display: flex;
-          align-items: center;
-          justify-content: center;
-          padding: 2rem;
-          animation: fadeIn 0.2s ease;
-        }
-
-        @keyframes fadeIn {
-          from { opacity: 0; }
-          to { opacity: 1; }
-        }
-
-        @keyframes slideUp {
-          from { opacity: 0; transform: translateY(12px) scale(0.98); }
-          to { opacity: 1; transform: translateY(0) scale(1); }
-        }
-
-        .search-modal {
-          width: 100%;
-          max-width: 780px;
-          height: 85vh;
-          background: var(--background);
-          border-radius: var(--radius-lg);
-          display: flex;
-          flex-direction: column;
-          box-shadow: var(--shadow-xl), 0 0 0 1px var(--card-border);
-          border: none;
-          overflow: hidden;
-          animation: slideUp 0.25s ease;
-        }
-
-        .search-modal-header {
-          padding: 1.25rem 1.5rem;
-          border-bottom: 1px solid var(--card-border);
-          display: flex;
-          align-items: center;
-          justify-content: space-between;
-          background: var(--card-bg);
-          flex-shrink: 0;
-        }
-
-        .search-modal-header h2 {
-          font-size: 1.15rem;
-          margin: 0;
-          color: var(--text-primary);
-          font-weight: 700;
-          letter-spacing: -0.01em;
-        }
-
-        .search-modal-content {
-          padding: 1.25rem;
-          overflow-y: auto;
-          flex-grow: 1;
-          display: flex;
-          flex-direction: column;
-          gap: 0.5rem;
-        }
-
-        .modal-card {
-          border: 1px solid var(--card-border);
-          border-radius: var(--radius-md);
-        }
-
-        .load-more-btn {
-          background: var(--card-bg);
-          border: 1px solid var(--card-border);
-          color: var(--text-muted);
-          padding: 0.875rem;
-          border-radius: var(--radius-md);
-          font-weight: 600;
-          font-size: 0.88rem;
-          cursor: pointer;
-          transition: all 0.2s;
-          margin-top: 0.5rem;
-        }
-
-        .load-more-btn:hover {
-          background: var(--card-hover);
-          color: var(--text-primary);
-        }
-
-        .random-btn {
-          font-size: 1rem;
-          transition: all 0.2s;
-        }
-
-        .random-btn:hover:not(:disabled) {
-          transform: rotate(15deg);
-        }
-
-        .translate-controls {
-          display: flex;
-          align-items: center;
-          background: var(--card-bg);
-          border: 1px solid var(--card-border);
-          border-radius: var(--radius-sm);
-          padding: 2px;
-          gap: 1px;
-        }
-
-        .lang-btn {
-          background: transparent;
-          border: none;
-          color: var(--text-muted);
-          font-size: 0.78rem;
-          font-weight: 600;
-          padding: 5px 9px;
-          cursor: pointer;
-          border-radius: calc(var(--radius-sm) - 2px);
-          transition: all 0.2s ease;
-          white-space: nowrap;
-        }
-
-        .lang-btn:hover:not(:disabled) {
-          background: var(--card-hover);
-          color: var(--text-primary);
-        }
-
-        .lang-btn.active {
-          background: var(--primary);
-          color: white;
-          box-shadow: 0 1px 4px rgba(79, 70, 229, 0.3);
-        }
-
-        .lang-btn:disabled {
-          opacity: 0.4;
-          cursor: not-allowed;
-        }
-
-        .translation-indicator {
-          position: absolute;
-          bottom: 1.25rem;
-          right: 1.25rem;
-          display: flex;
-          align-items: center;
-          gap: 0.6rem;
-          padding: 0.6rem 1.1rem;
-          background: var(--background);
-          border: 1px solid var(--card-border);
-          border-radius: 999px;
-          box-shadow: var(--shadow-lg);
-          z-index: 10;
-          animation: fadeIn 0.2s ease;
-          font-size: 0.85rem;
-          font-weight: 500;
-          color: var(--text-muted);
-        }
-
-        .translation-loading p {
-          font-size: 0.9rem;
-          font-weight: 500;
-        }
-
-        .api-key-modal {
-          width: 100%;
-          max-width: 460px;
-          background: var(--background);
-          border-radius: var(--radius-lg);
-          box-shadow: var(--shadow-xl);
-          border: 1px solid var(--card-border);
-          overflow: hidden;
-          animation: slideUp 0.25s ease;
-        }
-
-        .api-key-body {
-          padding: 1.5rem;
-          display: flex;
-          flex-direction: column;
-          gap: 1rem;
-        }
-
-        .api-key-body p {
-          color: var(--text-muted);
-          font-size: 0.88rem;
-          line-height: 1.6;
-        }
-
-        .api-key-input {
-          width: 100%;
-          padding: 0.7rem 0.875rem;
-          font-size: 0.88rem;
-          background: var(--card-bg);
-          border: 1px solid var(--card-border);
-          border-radius: var(--radius-sm);
-          color: var(--text-primary);
-          transition: all 0.2s;
-        }
-
-        .api-key-input:focus {
-          border-color: var(--primary);
-          box-shadow: 0 0 0 3px var(--primary-glow);
-          outline: none;
-        }
-
-        .save-key-btn {
-          padding: 0.7rem 1.5rem;
-          background: var(--primary);
-          color: white;
-          border: none;
-          border-radius: var(--radius-sm);
-          font-weight: 600;
-          font-size: 0.9rem;
-          cursor: pointer;
-          transition: all 0.2s;
-          box-shadow: 0 2px 8px rgba(79, 70, 229, 0.25);
-        }
-
-        .save-key-btn:hover {
-          background: var(--primary-hover);
-          box-shadow: 0 4px 12px rgba(79, 70, 229, 0.35);
-          transform: translateY(-1px);
-        }
-
-        .save-key-btn:disabled {
-          opacity: 0.4;
-          cursor: not-allowed;
-          box-shadow: none;
-          transform: none;
-        }
-
-        .theme-controls {
-          display: flex;
-          background: var(--card-bg);
-          border: 1px solid var(--card-border);
-          border-radius: var(--radius-sm);
-          padding: 2px;
-          gap: 1px;
-        }
-
-        .theme-btn {
-          background: transparent;
-          border: none;
-          border-radius: calc(var(--radius-sm) - 2px);
-          padding: 0.35rem 0.4rem;
-          cursor: pointer;
-          opacity: 0.5;
-          transition: all 0.2s;
-          font-size: 1rem;
-          line-height: 1;
-        }
-
-        .theme-btn:hover {
-          opacity: 0.85;
-        }
-
-        .theme-btn.active {
-          opacity: 1;
-          background: var(--card-hover);
-        }
-
-        .iframe-wrapper {
-          flex-grow: 1;
-          display: flex;
-          flex-direction: row;
-          position: relative;
-          background: var(--background);
-          overflow: hidden;
-        }
-        
-        .content-iframe {
-          position: absolute;
-          top: 0;
-          left: 0;
-          width: 100%;
-          height: 100%;
-          border: none;
-          background-color: #ffffff;
-          transition: background-color 0.3s;
-        }
-
-        .dark-iframe-bg {
-          background-color: #141825;
-        }
-
-        .loader-container-small {
-          display: flex;
-          justify-content: center;
-          padding: 3rem;
-        }
-
-        .loader.small {
-          width: 28px;
-          height: 28px;
-          border-width: 3px;
-        }
-
-        .full-height {
-          flex: 1;
-          display: flex;
-          flex-direction: column;
-          align-items: center;
-          justify-content: center;
-        }
-
-        .ai-controls {
-          display: flex;
-          align-items: center;
-          gap: 2px;
-          background: var(--card-bg);
-          border: 1px solid var(--card-border);
-          border-radius: var(--radius-sm);
-          padding: 2px;
-        }
-
-        .ai-btn {
-          font-size: 1rem;
-          transition: all 0.2s;
-        }
-
-        .ai-btn:hover:not(:disabled) {
-          transform: scale(1.1);
-        }
-
-        /* AI Centered Modal */
-        .ai-modal {
-          width: 100%;
-          max-width: 720px;
-          max-height: 85vh;
-          background: var(--background);
-          border-radius: var(--radius-lg);
-          display: flex;
-          flex-direction: column;
-          box-shadow: var(--shadow-xl), 0 0 0 1px var(--card-border);
-          border: none;
-          overflow: hidden;
-          animation: slideUp 0.25s ease;
-        }
-
-        .ai-modal-header {
-          padding: 1.25rem 1.5rem;
-          border-bottom: 1px solid var(--card-border);
-          display: flex;
-          align-items: center;
-          justify-content: space-between;
-          background: var(--card-bg);
-          flex-shrink: 0;
-        }
-
-        .ai-modal-header h2 {
-          font-size: 1.15rem;
-          margin: 0;
-          color: var(--text-primary);
-          font-weight: 700;
-        }
-
-        .ai-modal-body {
-          flex-grow: 1;
-          overflow-y: auto;
-          padding: 2rem;
-        }
-
-        .ai-loading-state {
-          display: flex;
-          flex-direction: column;
-          align-items: center;
-          justify-content: center;
-          padding: 4rem 2rem;
-          gap: 1.25rem;
-          color: var(--text-muted);
-        }
-
-        .ai-loading-state p {
-          font-size: 0.95rem;
-          font-weight: 500;
-        }
-
-        .ai-result-content {
-          font-size: 0.95rem;
-          line-height: 1.85;
-          color: var(--text-primary);
-          word-wrap: break-word;
-        }
-
-        .ai-result-content h3 {
-          font-size: 1.2rem;
-          font-weight: 700;
-          margin: 1.5rem 0 0.75rem 0;
-          color: var(--text-primary);
-          letter-spacing: -0.01em;
-        }
-
-        .ai-result-content h3:first-child {
-          margin-top: 0;
-        }
-
-        .ai-result-content h4 {
-          font-size: 1rem;
-          font-weight: 600;
-          margin: 1.25rem 0 0.5rem 0;
-          color: var(--primary);
-        }
-
-        .ai-result-content p {
-          margin: 0.6rem 0;
-        }
-
-        .ai-result-content ul, .ai-result-content ol {
-          margin: 0.75rem 0;
-          padding-left: 1.5rem;
-        }
-
-        .ai-result-content li {
-          margin: 0.4rem 0;
-          line-height: 1.7;
-        }
-
-        .ai-result-content strong {
-          color: var(--text-primary);
-          font-weight: 600;
-        }
-
-        .ai-result-content em {
-          font-style: italic;
-          color: var(--text-muted);
-        }
-
-        .ai-result-content blockquote {
-          margin: 1rem 0;
-          padding: 0.75rem 1.25rem;
-          border-left: 3px solid var(--primary);
-          background: var(--primary-glow);
-          border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
-          font-style: italic;
-        }
-
-        .ai-result-content hr {
-          margin: 2rem 0;
-          border: none;
-          border-top: 1px solid var(--card-border);
-        }
-
-        /* Comparative Mode */
-        .iframe-pane {
-          flex: 1;
-          position: relative;
-          min-height: 0;
-          min-width: 0;
-        }
-
-        .compare-left {
-          border-right: 1px solid var(--card-border);
-        }
-
-        .compare-right {
-          flex: 1;
-          display: flex;
-          flex-direction: column;
-          overflow: hidden;
-          position: relative;
-          min-width: 0;
-        }
-
-        .compare-label {
-          padding: 0.4rem 0.875rem;
-          font-size: 0.78rem;
-          font-weight: 600;
-          color: var(--text-muted);
-          background: var(--card-bg);
-          border-bottom: 1px solid var(--card-border);
-          text-transform: uppercase;
-          letter-spacing: 0.03em;
-          flex-shrink: 0;
-        }
-
-        .sidebar-content {
-          flex-grow: 1;
-          overflow-y: auto;
-          overflow-x: hidden;
-          padding: 0.5rem 0;
-        }
-
-        .sidebar-tabs {
-          display: flex;
-          padding: 0.5rem 0.75rem;
-          gap: 0.5rem;
-          border-bottom: 1px solid var(--card-border);
-        }
-
-        .sidebar-tab {
-          flex: 1;
-          padding: 0.5rem 0.75rem;
-          border: none;
-          background: transparent;
-          color: var(--text-muted);
-          font-size: 0.8rem;
-          font-weight: 600;
-          cursor: pointer;
-          border-radius: var(--radius-sm);
-          transition: all 0.2s;
-          display: flex;
-          align-items: center;
-          justify-content: center;
-          gap: 0.4rem;
-        }
-
-        .sidebar-tab:hover {
-          background: var(--card-hover);
-          color: var(--text-primary);
-        }
-
-        .sidebar-tab.active {
-          background: var(--primary-glow);
-          color: var(--primary);
-        }
-
-        .bookmark-count {
-          background: var(--primary);
-          color: white;
-          font-size: 0.65rem;
-          padding: 1px 6px;
-          border-radius: 99px;
-          min-width: 18px;
-          text-align: center;
-        }
-
-        .bookmarks-list {
-          padding: 0.5rem;
-        }
-
-        .empty-bookmarks {
-          padding: 2rem 1rem;
-          text-align: center;
-          color: var(--text-muted);
-        }
-
-        .empty-bookmarks p:first-child {
-          font-size: 0.95rem;
-          font-weight: 500;
-          margin-bottom: 0.5rem;
-        }
-
-        .text-small {
-          font-size: 0.78rem;
-          opacity: 0.7;
-        }
-
-        .bookmark-item {
-          display: flex;
-          align-items: center;
-          justify-content: space-between;
-          width: 100%;
-          padding: 0.6rem 0.75rem;
-          background: transparent;
-          border: none;
-          border-bottom: 1px solid var(--card-border);
-          color: var(--text-primary);
-          cursor: pointer;
-          transition: all 0.15s;
-          text-align: left;
-          font-size: 0.82rem;
-          gap: 0.5rem;
-        }
-
-        .bookmark-item:hover {
-          background: var(--card-hover);
-        }
-
-        .bookmark-item.active {
-          background: var(--primary-glow);
-          color: var(--primary);
-        }
-
-        .bookmark-title {
-          overflow: hidden;
-          text-overflow: ellipsis;
-          white-space: nowrap;
-          flex: 1;
-        }
-
-        .bookmark-remove {
-          background: none;
-          border: none;
-          color: var(--text-muted);
-          cursor: pointer;
-          padding: 2px 6px;
-          border-radius: var(--radius-sm);
-          font-size: 0.75rem;
-          flex-shrink: 0;
-          transition: all 0.15s;
-        }
-
-        .bookmark-remove:hover {
-          background: rgba(239, 68, 68, 0.15);
-          color: #ef4444;
-        }
-
-        .bookmark-active {
-          animation: bookmark-pop 0.3s ease;
-        }
-
-        @keyframes bookmark-pop {
-          0% { transform: scale(1); }
-          50% { transform: scale(1.3); }
-          100% { transform: scale(1); }
-        }
-        .compare-content {
-          flex: 1;
-          overflow-y: auto;
-          padding: 1.5rem;
-          font-size: 0.95rem;
-          line-height: 1.8;
-          color: var(--text-primary);
-          background: var(--background);
-          min-height: 0;
-        }
-
-        .compare-content.compare-dark {
-          background: #1e293b;
-          color: #e2e8f0;
-        }
-
-        /* ─── Translation Editor ─── */
-        .editing-badge {
-          margin-left: 8px;
-          font-size: 0.75rem;
-          color: var(--primary);
-          font-weight: 600;
-          letter-spacing: 0.03em;
-        }
-
-        .editor-toolbar {
-          display: flex;
-          align-items: center;
-          gap: 3px;
-          padding: 5px 10px;
-          background: var(--toolbar-bg);
-          backdrop-filter: blur(12px);
-          border-bottom: 1px solid var(--card-border);
-          flex-shrink: 0;
-          flex-wrap: wrap;
-        }
-
-        .editor-toolbar button {
-          background: transparent;
-          border: 1px solid transparent;
-          color: var(--text-primary);
-          cursor: pointer;
-          padding: 3px 7px;
-          border-radius: var(--radius-sm);
-          font-size: 0.8rem;
-          font-family: inherit;
-          min-width: 28px;
-          height: 28px;
-          display: inline-flex;
-          align-items: center;
-          justify-content: center;
-          transition: all 0.12s;
-        }
-
-        .editor-toolbar button:hover {
-          background: var(--card-hover);
-          border-color: var(--card-border);
-        }
-
-        .editor-toolbar button:active {
-          background: var(--primary-glow);
-          color: var(--primary);
-        }
-
-        .editor-sep {
-          width: 1px;
-          height: 18px;
-          background: var(--card-border);
-          margin: 0 4px;
-          flex-shrink: 0;
-        }
-
-        .compare-content.editor-active {
-          cursor: text;
-          outline: none;
-          border: 2px solid var(--primary);
-          border-radius: 0 0 var(--radius-sm) var(--radius-sm);
-          padding: 1.5rem;
-          min-height: 300px;
-        }
-
-        .compare-content.editor-active:focus {
-          box-shadow: 0 0 0 4px var(--primary-glow);
-        }
-
-        .split-divider {
-          flex-shrink: 0;
-          width: 6px;
-          background: var(--card-border);
-          cursor: col-resize;
-          transition: background 0.2s;
-          position: relative;
-          z-index: 5;
-        }
-
-        .split-divider:hover,
-        .split-divider:active {
-          background: var(--primary);
-        }
-
-        .split-divider::after {
-          content: '⋮';
-          position: absolute;
-          top: 50%;
-          left: 50%;
-          transform: translate(-50%, -50%);
-          font-size: 14px;
-          color: var(--text-muted);
-          pointer-events: none;
-        }
-
-        .compare-content h3 {
-          font-size: 1.15rem;
-          font-weight: 700;
-          margin: 1.25rem 0 0.5rem 0;
-        }
-
-        .compare-content h4 {
-          font-size: 1rem;
-          font-weight: 600;
-          margin: 1rem 0 0.4rem 0;
-        }
-
-        .compare-content p {
-          margin: 0.5rem 0;
-        }
-
-        .compare-content ul, .compare-content ol {
-          margin: 0.5rem 0;
-          padding-left: 1.5rem;
-        }
-
-        .compare-content li {
-          margin: 0.3rem 0;
-        }
-
-        .mobile-header-title {
-          display: none;
-        }
-
-        .desktop-only {
-          display: flex;
-        }
-
-        /* Premium Mobile Responsive UI */
-        .mobile-only {
-          display: none;
-        }
-
-        @media (max-width: 1024px) {
-          .desktop-only, .desktop-only-toolbar {
-            display: none !important;
-          }
-
-          .mobile-only {
-            display: flex;
-          }
-
-          .sidebar {
-            width: 100%;
-            position: absolute;
-            height: 100%;
-            z-index: 1005; /* Must sit above top and bottom navs (1000) */
-          }
-
-          .sidebar-content {
-            padding-bottom: 90px;
-          }
-
-          .sidebar-header {
-            height: 52px;
-          }
-
-          .main-content {
-            padding-top: 0 !important;
-            padding-bottom: 0 !important;
-          }
-
-          /* Auto-hiding transitions for full screen reading */
-          .nav-hidden-top {
-            transform: translateY(-110%);
-          }
-          .nav-hidden-bottom {
-            transform: translateY(110%);
-          }
-
-          /* Top Bar */
-          .mobile-premium-top-bar {
-            position: fixed;
-            top: 0;
-            left: 0;
-            right: 0;
-            height: 60px;
-            z-index: 1000;
-            padding: 0 16px;
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            background: var(--toolbar-bg);
-            backdrop-filter: blur(20px) saturate(180%);
-            -webkit-backdrop-filter: blur(20px) saturate(180%);
-            border-bottom: 1px solid var(--card-border);
-            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.05);
-            transition: transform 0.3s cubic-bezier(0.3, 0, 0, 1);
-          }
-
-          .mobile-title {
-            font-size: 1.1rem;
-            font-weight: 700;
-            color: var(--text-primary);
-            flex: 1;
-            text-align: center;
-            padding: 0 12px;
-          }
-
-          /* Bottom Nav */
-          .mobile-bottom-nav {
-            position: fixed;
-            bottom: 0;
-            left: 0;
-            right: 0;
-            z-index: 1000;
-            background: var(--toolbar-bg);
-            backdrop-filter: blur(20px) saturate(180%);
-            -webkit-backdrop-filter: blur(20px) saturate(180%);
-            border-top: 1px solid var(--card-border);
-            padding: 8px 16px;
-            padding-bottom: max(12px, calc(8px + env(safe-area-inset-bottom)));
-            display: flex;
-            justify-content: space-between;
-            align-items: flex-end;
-            box-shadow: 0 -4px 20px rgba(0, 0, 0, 0.05);
-            transition: transform 0.3s cubic-bezier(0.3, 0, 0, 1);
-          }
-
-          .nav-action-btn {
-            background: transparent;
-            border: none;
-            color: var(--text-muted);
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            justify-content: center;
-            gap: 4px;
-            cursor: pointer;
-            transition: all 0.2s ease;
-            min-width: 60px;
-          }
-
-          .nav-action-btn:hover, .nav-action-btn:active, .nav-action-btn.active {
-            color: var(--primary);
-          }
-
-          .nav-action-btn span {
-            font-size: 0.65rem;
-            font-weight: 600;
-            letter-spacing: 0.02em;
-          }
-
-          .bottom-nav-center-wrap {
-            position: relative;
-            display: flex;
-            justify-content: center;
-            width: 70px;
-          }
-
-          .center-primary-btn {
-            position: absolute;
-            bottom: 4px;
-            width: 56px;
-            height: 56px;
-            background: linear-gradient(135deg, var(--primary), var(--secondary));
-            border-radius: 50%;
-            color: white;
-            box-shadow: 0 4px 16px rgba(79, 70, 229, 0.4);
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            z-index: 2;
-          }
-
-          .center-primary-btn .ai-icon-large {
-            font-size: 1.6rem;
-          }
-
-          /* Settings Sheet */
-          .mobile-settings-sheet {
-            position: absolute;
-            bottom: 0;
-            left: 0;
-            width: 100%;
-            background: var(--toolbar-bg);
-            backdrop-filter: blur(25px) saturate(200%);
-            -webkit-backdrop-filter: blur(25px) saturate(200%);
-            border-radius: 24px 24px 0 0;
-            padding: 24px 20px;
-            padding-bottom: max(24px, env(safe-area-inset-bottom));
-            box-shadow: 0 -10px 40px rgba(0,0,0,0.25);
-            animation: sheetSlideUp 0.4s cubic-bezier(0.16, 1, 0.3, 1);
-            display: flex;
-            flex-direction: column;
-            gap: 1.5rem;
-            border-top: 1px solid var(--card-border);
-          }
-
-          @keyframes sheetSlideUp {
-            from { transform: translateY(100%); }
-            to { transform: translateY(0); }
-          }
-
-          .sheet-handle {
-            width: 48px;
-            height: 6px;
-            background: var(--text-muted);
-            opacity: 0.4;
-            border-radius: 99px;
-            margin: -10px auto 10px auto;
-          }
-
-          .sheet-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-          }
-
-          .sheet-header .icon-button {
-            background: rgba(128, 128, 128, 0.15);
-            border-radius: 50%;
-            width: 36px;
-            height: 36px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            color: var(--text-primary);
-            margin-right: -4px;
-          }
-
-          .sheet-title {
-            font-size: 1.35rem;
-            font-weight: 800;
-            color: var(--text-primary);
-            margin: 0;
-          }
-
-          .sheet-subtitle {
-            font-size: 0.9rem;
-            font-weight: 600;
-            color: var(--text-muted);
-            margin: 0 0 0.5rem 0;
-            text-transform: uppercase;
-            letter-spacing: 0.05em;
-          }
-
-          .sheet-section {
-            display: flex;
-            flex-direction: column;
-            gap: 0.75rem;
-          }
-
-          .sheet-row {
-            display: flex;
-            align-items: center;
-            background: rgba(128, 128, 128, 0.08);
-            border-radius: 16px;
-            padding: 6px;
-            border: 1px solid rgba(128, 128, 128, 0.1);
-            gap: 6px;
-          }
-
-          .sheet-btn {
-            flex: 1;
-            padding: 12px 6px;
-            background: transparent;
-            border: none;
-            border-radius: 12px;
-            color: var(--text-muted);
-            font-weight: 700;
-            font-size: 0.95rem;
-            cursor: pointer;
-            transition: all 0.2s;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            gap: 8px;
-          }
-
-          .sheet-btn.active {
-            background: var(--card-bg);
-            color: var(--primary);
-            box-shadow: 0 4px 12px rgba(0,0,0,0.1);
-          }
-
-          .sheet-val {
-            min-width: 60px;
-            text-align: center;
-            font-weight: 800;
-            color: var(--primary);
-            font-size: 1.05rem;
-          }
-
-          .sheet-btn.full-width {
-            background: rgba(128, 128, 128, 0.08);
-            border: 1px solid rgba(128, 128, 128, 0.1);
-            padding: 16px;
-            color: var(--text-primary);
-          }
-
-          .sheet-btn.full-width:active {
-            background: rgba(128, 128, 128, 0.15);
-          }
-
-          /* Modals overrides */
-          .search-modal-overlay {
-            padding: 0;
-            align-items: flex-end;
-          }
-
-          .search-modal, .ai-modal {
-            height: 92vh;
-            max-height: 92vh;
-            border-radius: 24px 24px 0 0;
-            margin-top: auto;
-          }
-
-          .ai-modal-body {
-            padding: 1rem;
-          }
-
-          .book-search-results {
-            width: calc(100vw - 2rem);
-            left: -1rem;
-            top: 60px;
-          }
-
-          .iframe-wrapper.compare-active {
-            flex-direction: column;
-          }
-
-          .compare-left {
-            border-right: none;
-            border-bottom: 1px solid var(--card-border);
-          }
-
-          .compare-left, .compare-right {
-            flex: 1 !important;
-            min-height: 0;
-          }
-
-          .split-divider {
-            width: 100%;
-            height: 6px;
-            cursor: row-resize;
-          }
-
-          .split-divider::after {
-            content: '⋯';
-          }
-
-          .translation-indicator {
-            position: fixed;
-            top: auto;
-            bottom: 90px;
-            left: 50%;
-            transform: translateX(-50%);
-            border-radius: 999px;
-            padding: 0.8rem 1.5rem;
-            z-index: 999;
-            box-shadow: var(--shadow-lg);
-          }
-        }
-
-        /* ─── Swipe Hint ─── */
-        .swipe-hint {
-          display: none;
-        }
-
-        @media (max-width: 768px) {
-          .swipe-hint {
-            display: flex;
-            position: fixed;
-            bottom: 70px;
-            left: 50%;
-            transform: translateX(-50%);
-            z-index: 999;
-            background: rgba(0,0,0,0.75);
-            color: #fff;
-            padding: 10px 24px;
-            border-radius: 24px;
-            font-size: 0.85rem;
-            cursor: pointer;
-            animation: swipeHintFade 4s ease forwards;
-            pointer-events: auto;
-          }
-        }
-
-        @keyframes swipeHintFade {
-          0%, 70% { opacity: 1; }
-          100% { opacity: 0; pointer-events: none; }
+          flex:1;padding:8px 36px 8px 14px;border:none;border-radius:9px;
+          background:var(--surface);box-shadow:var(--shadow-neu-in);
+          font-family:var(--font-ui);font-size:0.82rem;color:var(--text);outline:none;
+          transition:box-shadow 0.15s;
+        }
+        .toolbar-input:focus { box-shadow:var(--shadow-neu-in),0 0 0 2px var(--primary-light); }
+        .clear-search-btn { position:absolute;right:10px;top:50%;transform:translateY(-50%);border:none;background:none;color:var(--text-faint);cursor:pointer;font-size:13px; }
+
+        /* Lang buttons */
+        .translate-controls { display:flex;gap:4px; }
+        .lang-btn { padding:5px 9px;border-radius:7px;border:none;background:var(--surface);box-shadow:var(--shadow-neu-sm);color:var(--text-muted);font-family:var(--font-ui);font-size:0.73rem;font-weight:700;cursor:pointer;transition:all 0.15s; }
+        .lang-btn:hover { color:var(--primary); }
+        .lang-btn.active { background:var(--primary);color:#fff;box-shadow:2px 2px 8px rgba(0,102,102,0.3); }
+        .lang-btn:disabled { opacity:0.4;cursor:not-allowed; }
+
+        /* Nav controls */
+        .nav-controls { display:flex;gap:4px; }
+
+        /* ── Breadcrumb ── */
+        .breadcrumb-bar { padding:7px 18px;background:var(--surface-up);border-bottom:1px solid var(--surface-border);font-family:var(--font-ui);font-size:0.72rem;color:var(--text-muted);display:flex;align-items:center;flex-wrap:wrap;gap:4px; }
+        .breadcrumb-sep { margin:0 4px;opacity:0.4; }
+        .breadcrumb-current { color:var(--text);font-weight:700; }
+
+        /* ── iframe area ── */
+        .iframe-wrapper { flex:1;display:flex;overflow:hidden;position:relative; }
+        .iframe-pane { flex:1;display:flex;flex-direction:column;overflow:hidden; }
+        .content-iframe { flex:1;border:none;width:100%;background:var(--surface-up); }
+        .dark-iframe-bg { background:#1a2332; }
+        .iframe-loading { opacity:0.5;transition:opacity 0.3s; }
+
+        /* Compare mode */
+        .compare-active { }
+        .compare-left,.compare-right { display:flex;flex-direction:column;overflow:hidden;min-width:0; }
+        .compare-label { padding:6px 14px;font-family:var(--font-ui);font-size:0.72rem;font-weight:700;color:var(--text-muted);background:var(--surface-up);border-bottom:1px solid var(--surface-border); }
+        .editing-badge { margin-left:8px;padding:2px 8px;border-radius:999px;background:var(--warning);color:#fff;font-size:0.68rem; }
+        .split-divider { width:6px;cursor:col-resize;background:var(--surface-border);display:flex;align-items:center;justify-content:center;font-size:10px;color:var(--text-faint);user-select:none; }
+        .compare-content { flex:1;overflow-y:auto;padding:30px 40px;font-family:var(--font-read);font-size:var(--fs,18px);line-height:var(--lh,1.8);color:var(--text); }
+        .compare-dark { background:#1a2332;color:#e2eaf0; }
+        .editor-active { outline:2px solid var(--primary);border-radius:4px; }
+
+        /* Editor toolbar */
+        .editor-toolbar { display:flex;gap:4px;padding:6px 12px;background:var(--surface-up);border-bottom:1px solid var(--surface-border);flex-wrap:wrap; }
+        .editor-toolbar button { padding:4px 8px;border-radius:6px;border:none;background:var(--surface);box-shadow:var(--shadow-neu-sm);color:var(--text);font-size:0.78rem;cursor:pointer; }
+        .editor-sep { width:1px;background:var(--surface-border);margin:2px 2px; }
+
+        /* Translation indicator */
+        .translation-indicator { position:fixed;bottom:80px;left:50%;transform:translateX(-50%);display:flex;align-items:center;gap:10px;padding:10px 20px;background:var(--surface-up);box-shadow:var(--shadow-neu-out);border-radius:999px;font-family:var(--font-ui);font-size:0.82rem;color:var(--text);z-index:9000; }
+
+        /* ── Modals ── */
+        .search-modal-overlay { position:fixed;inset:0;background:rgba(0,0,0,0.35);backdrop-filter:blur(4px);z-index:10000;display:flex;align-items:center;justify-content:center;padding:20px; }
+        .search-modal { background:var(--surface);box-shadow:var(--shadow-neu-out);border-radius:20px;width:100%;max-width:700px;max-height:85vh;display:flex;flex-direction:column;overflow:hidden; }
+        .search-modal-header { display:flex;align-items:center;justify-content:space-between;padding:18px 22px;border-bottom:1px solid var(--surface-border); }
+        .search-modal-header h2 { font-family:var(--font-ui);font-size:0.95rem;font-weight:700;color:var(--text);margin:0; }
+        .search-modal-content { flex:1;overflow-y:auto;padding:10px 14px; }
+
+        .glass-panel { background:var(--surface);box-shadow:var(--shadow-neu-out);border-radius:16px; }
+
+        .book-search-results { position:absolute;top:calc(100% + 8px);left:0;right:0;z-index:5000;border-radius:14px;overflow:hidden;animation:fadeIn 0.15s ease; }
+        .search-results-header { padding:10px 14px 6px;border-bottom:1px solid var(--surface-border); }
+        .search-results-header h4 { font-family:var(--font-ui);font-size:0.8rem;color:var(--text-muted);margin:0; }
+        .search-results-list-small { max-height:320px;overflow-y:auto; }
+        .search-result-item { width:100%;padding:10px 14px;border:none;background:none;cursor:pointer;text-align:left;border-bottom:1px solid var(--surface-border);transition:background 0.1s; }
+        .search-result-item:hover { background:var(--surface-up); }
+        .modal-card { border-radius:10px;margin-bottom:4px;border-bottom:none!important; }
+        .res-file { font-family:var(--font-ui);font-size:0.75rem;font-weight:700;color:var(--primary);margin-bottom:3px; }
+        .res-snippet { font-family:var(--font-ui);font-size:0.78rem;color:var(--text-muted);line-height:1.4; }
+        .res-snippet mark { background:#fde68a;color:#78350f;border-radius:3px;padding:0 2px; }
+        .no-results { padding:16px 14px;font-family:var(--font-ui);font-size:0.82rem;color:var(--text-muted); }
+        .show-more-btn,.load-more-btn { width:100%;padding:10px;border:none;background:var(--primary-light);color:var(--primary);font-family:var(--font-ui);font-size:0.8rem;font-weight:700;cursor:pointer;border-radius:0 0 12px 12px; }
+
+        /* API key modal */
+        .api-key-modal { max-width:480px;width:100%;padding:28px;animation:fadeIn 0.2s ease; }
+        .api-key-body p { font-family:var(--font-ui);font-size:0.85rem;color:var(--text-muted);margin-bottom:14px;line-height:1.6; }
+        .api-key-input { width:100%;margin-bottom:12px; }
+        .save-key-btn { width:100%;padding:11px;border-radius:10px;border:none;background:var(--primary);color:#fff;font-family:var(--font-ui);font-weight:700;font-size:0.88rem;cursor:pointer;box-shadow:3px 3px 10px rgba(0,102,102,0.3); }
+
+        /* ── Loading ── */
+        .loader-container { display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;gap:14px; }
+        .loader,.loader.small { width:36px;height:36px;border:3px solid var(--surface-border);border-top-color:var(--primary);border-radius:50%;animation:spin 0.8s linear infinite; }
+        .loader.small { width:18px;height:18px;border-width:2px; }
+        @keyframes spin { to { transform:rotate(360deg); } }
+
+        .empty-state { display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;gap:12px;font-family:var(--font-ui); }
+        .empty-state h3 { font-size:1.1rem;color:var(--text);margin:0; }
+        .empty-state p { font-size:0.85rem;color:var(--text-muted);margin:0; }
+        .back-link { padding:9px 18px;border-radius:9px;background:var(--primary);color:#fff;text-decoration:none;font-family:var(--font-ui);font-size:0.82rem;font-weight:700; }
+        .full-height { height:100%; }
+
+        /* ── Desktop only / Mobile only ── */
+        .desktop-only { display:flex; }
+        .mobile-only { display:none; }
+
+        /* ── Mobile top bar ── */
+        .mobile-premium-top-bar { display:none;align-items:center;justify-content:space-between;padding:0 12px;height:52px;flex-shrink:0;gap:8px;background:var(--surface-up);box-shadow:0 2px 12px var(--neu-dark);position:sticky;top:0;z-index:200; }
+        .mobile-title { font-family:var(--font-ui);font-size:0.82rem;font-weight:700;color:var(--text);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-align:center; }
+
+        .nav-hidden-top { transform:translateY(-100%);transition:transform 0.3s ease; }
+        .nav-hidden-bottom { transform:translateY(100%);transition:transform 0.3s ease; }
+
+        /* ── Mobile bottom nav ── */
+        .mobile-bottom-nav { display:none;align-items:center;justify-content:space-around;padding:0 8px;height:60px;position:fixed;bottom:0;left:0;right:0;z-index:200;background:var(--surface-up);box-shadow:0 -2px 16px var(--neu-dark); }
+        .nav-action-btn { display:flex;flex-direction:column;align-items:center;gap:3px;padding:6px 14px;border:none;background:none;color:var(--text-muted);font-family:var(--font-ui);font-size:0.65rem;cursor:pointer;border-radius:10px;transition:color 0.15s; }
+        .nav-action-btn:hover,.nav-action-btn:active { color:var(--primary); }
+        .nav-action-btn:disabled { opacity:0.3;cursor:not-allowed; }
+        .bottom-nav-center-wrap { position:relative;display:flex;align-items:center;justify-content:center; }
+        .center-primary-btn { width:46px;height:46px;border-radius:50%!important;padding:0!important;background:var(--primary)!important;box-shadow:3px 3px 12px rgba(0,102,102,0.4)!important;margin-top:-12px; }
+        .ai-icon-large { font-size:20px; }
+
+        /* Mobile settings sheet */
+        .mobile-settings-sheet { position:fixed;bottom:0;left:0;right:0;background:var(--surface);border-radius:20px 20px 0 0;box-shadow:0 -8px 30px var(--neu-dark);z-index:10001;padding:0 0 32px;max-height:80vh;overflow-y:auto;transform:translateY(100%);transition:transform 0.3s cubic-bezier(.4,0,.2,1); }
+        .sheet-open { transform:translateY(0)!important; }
+        .sheet-handle { width:36px;height:4px;border-radius:999px;background:var(--surface-border);margin:12px auto 8px; }
+        .sheet-header { display:flex;align-items:center;justify-content:space-between;padding:8px 18px 12px;border-bottom:1px solid var(--surface-border); }
+        .sheet-title { font-family:var(--font-ui);font-size:0.9rem;font-weight:700;color:var(--text);margin:0; }
+        .sheet-subtitle { font-family:var(--font-ui);font-size:0.72rem;color:var(--text-muted);margin:0 0 8px; }
+        .sheet-section { padding:14px 16px;border-bottom:1px solid var(--surface-border); }
+        .sheet-row { display:flex;align-items:center;gap:8px;margin-bottom:8px; }
+        .sheet-row:last-child { margin-bottom:0; }
+        .sheet-val { font-family:var(--font-ui);font-size:0.85rem;color:var(--text);min-width:48px;text-align:center; }
+        .sheet-btn { flex:1;padding:9px 8px;border-radius:9px;border:none;background:var(--surface);box-shadow:var(--shadow-neu-sm);color:var(--text-muted);font-family:var(--font-ui);font-size:0.78rem;font-weight:700;cursor:pointer;transition:all 0.15s; }
+        .sheet-btn.active { background:var(--primary);color:#fff;box-shadow:2px 2px 8px rgba(0,102,102,0.3); }
+        .sheet-btn.full-width { width:100%; }
+
+        /* ── Swipe hint ── */
+        .swipe-hint { display:none;position:fixed;bottom:72px;left:50%;transform:translateX(-50%);background:rgba(0,0,0,0.65);color:#fff;padding:9px 22px;border-radius:999px;font-family:var(--font-ui);font-size:0.82rem;z-index:999;animation:swipeHintFade 4s ease forwards;cursor:pointer; }
+
+        /* AI btn */
+        .ai-btn { min-width:34px;gap:5px;padding:0 10px;width:auto; }
+        .ai-btn .tooltip { font-size:0.75rem;font-weight:700;font-family:var(--font-ui); }
+
+        /* Search spinner */
+        .search-spinner-small { display:inline-block;width:12px;height:12px;border:2px solid var(--surface-border);border-top-color:var(--primary);border-radius:50%;animation:spin 0.7s linear infinite;vertical-align:middle;margin-left:6px; }
+
+        /* Random btn */
+        .random-btn { font-size:16px; }
+
+        @keyframes fadeIn { from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:translateY(0)} }
+        @keyframes swipeHintFade { 0%,70%{opacity:1}100%{opacity:0;pointer-events:none} }
+
+        /* ── MOBILE breakpoint ── */
+        @media (max-width:1024px) {
+          .desktop-only { display:none!important; }
+          .mobile-only { display:flex!important; }
+          .reader-sidebar { position:absolute;top:0;left:0;height:100%;z-index:500; }
+          .sidebar-closed { transform:translateX(-100%); }
+          .reader-main { padding-bottom:60px; }
+          .mobile-bottom-nav { display:flex; }
+          .mobile-premium-top-bar { display:flex; }
+          .reader-toolbar { display:none; }
+          .split-divider { width:100%;height:6px;cursor:row-resize; }
+          .compare-left,.compare-right { flex:1!important;min-height:0; }
+          .translation-indicator { bottom:72px; }
+          .swipe-hint { display:flex; }
         }
       `}</style>
     </div>
