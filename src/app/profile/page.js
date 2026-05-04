@@ -3,7 +3,7 @@
 import { useState } from 'react';
 import { useReader } from '@/context/ReaderContext';
 import Link from 'next/link';
-import WhatsNew from '@/components/WhatsNew';
+import WhatsNew, { CopyCard } from '@/components/WhatsNew';
 
 const COLOR_MAP = {
   yellow: { bg: '#fde68a', text: '#78350f', border: '#fbbf24' },
@@ -473,15 +473,11 @@ export default function ProfilePage() {
         }}>
           <p style={{ margin: 0, fontFamily: 'var(--font-ui)', fontSize: '0.78rem', color: 'var(--text-muted)', fontWeight: 700, letterSpacing: '0.05em', textTransform: 'uppercase' }}>Байланыс</p>
           <a href="https://t.me/anonaskbot?start=n37k833uklxykpfu" target="_blank" rel="noopener noreferrer"
-            style={{ display: 'flex', alignItems: 'center', gap: '10px', textDecoration: 'none', color: 'var(--text)', fontFamily: 'var(--font-ui)', fontSize: '0.85rem' }}>
+            style={{ display: 'flex', alignItems: 'center', gap: '10px', textDecoration: 'none', color: '#006666', fontFamily: 'var(--font-ui)', fontSize: '0.85rem', fontWeight: 700 }}>
             <span style={{ width: '32px', height: '32px', borderRadius: '9px', background: 'var(--surface)', boxShadow: 'var(--shadow-neu-sm)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '1rem', flexShrink: 0 }}>💬</span>
-            <span>Идеялар мен кері байланыс — <strong style={{ color: 'var(--primary)' }}>t.me/anonaskbot</strong></span>
+            <span>Идеялар мен кері байланыс — <strong style={{ color: '#006666' }}>t.me/anonaskbot</strong></span>
           </a>
-          <a href="https://send.monobank.ua/jar/4003035112072389" target="_blank" rel="noopener noreferrer"
-            style={{ display: 'flex', alignItems: 'center', gap: '10px', textDecoration: 'none', color: 'var(--text)', fontFamily: 'var(--font-ui)', fontSize: '0.85rem' }}>
-            <span style={{ width: '32px', height: '32px', borderRadius: '9px', background: 'var(--surface)', boxShadow: 'var(--shadow-neu-sm)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '1rem', flexShrink: 0 }}>☕</span>
-            <span>Демеу: <strong style={{ color: 'var(--primary)' }}>4003035112072389</strong> (Monobank)</span>
-          </a>
+          <CopyCard number="4003035112072389" />
         </div>
         <p style={{ margin: 0, fontFamily: 'var(--font-ui)', fontSize: '0.72rem', color: 'var(--text-faint)', textAlign: 'center' }}>
           Сіздің әр аудармаңыз тиын тұрады 🤍
