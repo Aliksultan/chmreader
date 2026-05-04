@@ -114,7 +114,7 @@ export default function ProfilePage() {
     return (
       <div style={s.page}>
         <nav style={s.nav}>
-          <Link href="/" style={s.navLogo}>RNK</Link>
+          <Link href="/" style={s.navLogo}>Kütüphane</Link>
         </nav>
         <div style={s.loginCard}>
           <div style={{ fontSize: '2.5rem', marginBottom: '16px' }}>📚</div>
@@ -168,7 +168,7 @@ export default function ProfilePage() {
     <div style={s.page}>
       {/* Nav */}
       <nav style={s.nav}>
-        <Link href="/" style={s.navLogo}>RNK</Link>
+        <Link href="/" style={s.navLogo}>Kütüphane</Link>
         <div style={s.navRight}>
           <Link href="/" style={{
             fontSize: '0.8rem',

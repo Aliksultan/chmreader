@@ -25,8 +25,8 @@ const amiri = Amiri_Quran({
 });
 
 export const metadata = {
-  title: "RNK Reader — Premium Reading Platform",
-  description: "A premium web-based reading platform for Islamic scholarly texts",
+  title: "Kütüphane",
+  description: "İslami ilimler için premium okuma platformu",
 };
 
 export default function RootLayout({ children }) {
