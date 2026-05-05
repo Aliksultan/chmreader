@@ -12,6 +12,7 @@
     "@ai-sdk/google": "^3.0.53",
     "@ai-sdk/react": "^3.0.139",
     "@upstash/redis": "^1.36.3",
+    "@vercel/analytics": "^2.0.1",
     "ai": "^6.0.137",
     "iconv-lite": "^0.7.2",
     "jschardet": "^3.1.4",
