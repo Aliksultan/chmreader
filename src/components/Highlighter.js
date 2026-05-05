@@ -12,7 +12,7 @@ const COLORS = [
   { id: 'purple', hex: '#ddd6fe', dark: '#4c1d95', label: 'Purple' },
 ];
 
-export default function Highlighter({ iframeRef, currentPage, bookId }) {
+export default function Highlighter({ iframeRef, currentPage, bookId, activeLang = 'tr' }) {
   const { user, addToHighlightsIndex, removeFromHighlightsIndex } = useReader();
 
   const [highlights, setHighlights]     = useState([]);
@@ -144,6 +144,7 @@ export default function Highlighter({ iframeRef, currentPage, bookId }) {
       id: h.id, book: bookId, bookTitle: bookId,
       pageId: currentPage, text: h.text,
       color, note, timestamp: h.timestamp,
+      lang: activeLang, // save the language so profile can restore it
     });
     iframeRef.current.contentWindow.getSelection().removeAllRanges();
     setToolbarPos(null);

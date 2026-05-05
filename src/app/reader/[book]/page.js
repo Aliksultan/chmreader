@@ -76,6 +76,7 @@ export default function Reader({ params, searchParams }) {
   const unwrappedSearchParams = use(searchParams);
   const book = decodeURIComponent(unwrappedParams.book);
   const targetPage = unwrappedSearchParams.page ? decodeURIComponent(unwrappedSearchParams.page) : null;
+  const targetLangParam = unwrappedSearchParams.lang || null; // e.g. 'kk' or 'ru' from a quote link
   
   const { settings, updateSettings, user, bookmarks, addBookmark, removeBookmark, addToHighlightsIndex, removeFromHighlightsIndex } = useReader();
 
@@ -397,6 +398,31 @@ export default function Reader({ params, searchParams }) {
     setCompareMode(false);
   }, [currentPage]);
 
+  // Auto-translate when arriving from a quote link with ?lang=kk/ru
+  const hasAutoTranslatedRef = useRef(false);
+  useEffect(() => {
+    if (!targetLangParam || targetLangParam === 'tr') return;
+    if (hasAutoTranslatedRef.current) return;
+
+    // Wait for the iframe to load content before translating
+    const iframe = iframeRef.current;
+    if (!iframe) return;
+
+    const trigger = () => {
+      if (hasAutoTranslatedRef.current) return;
+      hasAutoTranslatedRef.current = true;
+      // Small delay to let the iframe fully paint its content first
+      setTimeout(() => handleTranslate(targetLangParam), 600);
+    };
+
+    if (iframe.contentDocument?.readyState === 'complete') {
+      trigger();
+    } else {
+      iframe.addEventListener('load', trigger, { once: true });
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [targetLangParam, iframeRef]);
+
   const handleRandomSection = () => {
     if (flattenedToc.length === 0) return;
     const randomIndex = Math.floor(Math.random() * flattenedToc.length);
@@ -527,7 +553,11 @@ export default function Reader({ params, searchParams }) {
 
         if (targetPage) {
           // If a specific page is requested via URL, load it
-          setCurrentPage(`${readData.cacheUrl || `/cache/${book.replace('.chm', '')}`}/${targetPage}`);
+          if (targetPage.startsWith('/')) {
+            setCurrentPage(targetPage);
+          } else {
+            setCurrentPage(`${readData.cacheUrl || `/cache/${book.replace('.chm', '')}`}/${targetPage}`);
+          }
         } else if (savedPage) {
           // Otherwise load saved progress
           setCurrentPage(savedPage);
@@ -1407,6 +1437,33 @@ export default function Reader({ params, searchParams }) {
                     </div>
                   )}
 
+                  {/* Dynamic Styles for Compare Content to match Settings */}
+                  <style>{`
+                    .compare-content,
+                    .compare-content p, .compare-content div, .compare-content span, .compare-content li, 
+                    .compare-content ul, .compare-content ol, .compare-content td, .compare-content th, 
+                    .compare-content blockquote, .compare-content pre, .compare-content h1, .compare-content h2, 
+                    .compare-content h3, .compare-content h4, .compare-content h5, .compare-content h6, .compare-content font {
+                      font-family: ${settings.mainFontFamily}, -apple-system, sans-serif !important;
+                    }
+                    .compare-content,
+                    .compare-content p, .compare-content div, .compare-content span, .compare-content li, 
+                    .compare-content td, .compare-content th, .compare-content blockquote, .compare-content pre, .compare-content font {
+                      font-size: ${settings.mainFontSize}px !important;
+                      line-height: ${settings.lineHeight} !important;
+                    }
+                    .compare-content h1 { font-size: ${Math.round(settings.mainFontSize * 1.8)}px !important; line-height: 1.25 !important; }
+                    .compare-content h2 { font-size: ${Math.round(settings.mainFontSize * 1.5)}px !important; line-height: 1.3  !important; }
+                    .compare-content h3 { font-size: ${Math.round(settings.mainFontSize * 1.25)}px !important; line-height: 1.35 !important; }
+
+                    .compare-content [lang^="ar"], .compare-content [dir="rtl"], .compare-content .arabic-text, 
+                    .compare-content font[face*="Arabic"], .compare-content font[face*="arabic"] {
+                      font-family: ${settings.arabicFontFamily}, serif !important;
+                      font-size: ${settings.arabicFontSize}px !important;
+                      line-height: 2 !important;
+                    }
+                  `}</style>
+
                   {/* Editable / Read-only content */}
                   <div
                     ref={el => { compareContentRef.current = el; if (isEditing) editorRef.current = el; }}
@@ -1603,7 +1660,7 @@ export default function Reader({ params, searchParams }) {
       )}
 
       {/* Highlighter Component */}
-      <Highlighter iframeRef={iframeRef} currentPage={currentPage} bookId={book.replace('.chm', '')} />
+      <Highlighter iframeRef={iframeRef} currentPage={currentPage} bookId={book.replace('.chm', '')} activeLang={activeLang} />
 
       <style jsx global>{`
         /* ── Layout ── */
