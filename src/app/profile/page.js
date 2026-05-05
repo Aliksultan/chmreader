@@ -424,7 +424,7 @@ export default function ProfilePage() {
                       </div>
                       <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
                         <Link
-                          href={`/reader/${encodeURIComponent(h.book)}?page=${encodeURIComponent(h.pageId)}`}
+                          href={`/reader/${encodeURIComponent(h.book)}?page=${encodeURIComponent(h.pageId)}${h.lang && h.lang !== 'tr' ? `&lang=${h.lang}` : ''}`}
                           style={{
                             padding: '6px 14px',
                             borderRadius: '8px',
