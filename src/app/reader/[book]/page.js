@@ -7,11 +7,35 @@ import ReaderSettings from '@/components/ReaderSettings';
 import Highlighter from '@/components/Highlighter';
 import { useReader } from '@/context/ReaderContext';
 
-function TocNode({ item, cacheUrl, setCurrentPage, currentPage, level = 0, expandedPaths, onToggleExpand, nodePath }) {
+// videoPath: tracks position inside the 'videos' folder so we can build /videos/{playlist}/{ep} links
+function TocNode({ item, cacheUrl, setCurrentPage, currentPage, level = 0, expandedPaths, onToggleExpand, nodePath, videoPath = null }) {
   const hasChildren = item.children && item.children.length > 0;
   const isCurrent = currentPage === `${cacheUrl}/${item.local}`;
   const expanded = expandedPaths.has(nodePath);
   const nodeRef = useRef(null);
+
+  // Raw filesystem slug of this node (last segment of nodePath index-path is not useful; use item name directly)
+  // The TOC API uses cleaned names but we need raw slugs for URLs. We store rawName via item.raw when available,
+  // or fall back to a slugified version of item.name.
+  const rawSlug = item.raw || item.name.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '');
+
+  // Compute videoPath for children:
+  // - If this item IS the 'videos' folder (name === 'videos'), children get videoPath = '' (ready for playlist slug)
+  // - If videoPath is '' (we're at playlist level), children get videoPath = rawSlug (the playlist)
+  // - If videoPath is a playlist slug, children are episodes (leaf links)
+  // - Otherwise null = not in videos subtree
+  const childVideoPath =
+    (item.name === 'videos' || item.name === 'Videos')
+      ? ''
+      : videoPath === ''
+        ? rawSlug          // playlist level → children are episodes
+        : videoPath !== null
+          ? videoPath       // already at episode level (shouldn't recurse further)
+          : null;           // not in videos subtree
+
+  // A video episode: videoPath is a playlist slug (non-empty), this is a leaf (no children, no local)
+  const isVideoEpisode = typeof videoPath === 'string' && videoPath !== '' && !hasChildren && !item.local;
+  const videoLink = isVideoEpisode ? `/videos/${videoPath}/${rawSlug}` : null;
 
   // Auto-scroll active node into view
   useEffect(() => {
@@ -36,19 +60,30 @@ function TocNode({ item, cacheUrl, setCurrentPage, currentPage, level = 0, expan
         ) : (
           <span className="toc-toggle-spacer" />
         )}
-        <button
-          className={`toc-button ${!item.local ? 'toc-folder' : ''}`}
-          onClick={() => {
-            if (item.local) {
-              setCurrentPage(`${cacheUrl}/${item.local}`);
-            } else if (hasChildren) {
-              onToggleExpand(nodePath);
-            }
-          }}
-        >
-          <span className="toc-icon">{hasChildren ? (expanded ? '📂' : '📁') : '📄'}</span>
-          <span className="toc-text" title={item.name}>{item.name}</span>
-        </button>
+        {videoLink ? (
+          <Link
+            href={videoLink}
+            className="toc-button"
+            style={{ display: 'flex', alignItems: 'center', gap: '6px', textDecoration: 'none', color: 'inherit' }}
+          >
+            <span className="toc-icon">🎬</span>
+            <span className="toc-text" title={item.name}>{item.name}</span>
+          </Link>
+        ) : (
+          <button
+            className={`toc-button ${!item.local ? 'toc-folder' : ''}`}
+            onClick={() => {
+              if (item.local) {
+                setCurrentPage(`${cacheUrl}/${item.local}`);
+              } else if (hasChildren) {
+                onToggleExpand(nodePath);
+              }
+            }}
+          >
+            <span className="toc-icon">{hasChildren ? (expanded ? '📂' : '📁') : '📄'}</span>
+            <span className="toc-text" title={item.name}>{item.name}</span>
+          </button>
+        )}
       </div>
       {hasChildren && expanded && (
         <ul className="toc-list sub-list">
@@ -63,6 +98,7 @@ function TocNode({ item, cacheUrl, setCurrentPage, currentPage, level = 0, expan
               expandedPaths={expandedPaths}
               onToggleExpand={onToggleExpand}
               nodePath={`${nodePath}/${idx}`}
+              videoPath={childVideoPath}
             />
           ))}
         </ul>
@@ -398,30 +434,6 @@ export default function Reader({ params, searchParams }) {
     setCompareMode(false);
   }, [currentPage]);
 
-  // Auto-translate when arriving from a quote link with ?lang=kk/ru
-  const hasAutoTranslatedRef = useRef(false);
-  useEffect(() => {
-    if (!targetLangParam || targetLangParam === 'tr') return;
-    if (hasAutoTranslatedRef.current) return;
-
-    // Wait for the iframe to load content before translating
-    const iframe = iframeRef.current;
-    if (!iframe) return;
-
-    const trigger = () => {
-      if (hasAutoTranslatedRef.current) return;
-      hasAutoTranslatedRef.current = true;
-      // Small delay to let the iframe fully paint its content first
-      setTimeout(() => handleTranslate(targetLangParam), 600);
-    };
-
-    if (iframe.contentDocument?.readyState === 'complete') {
-      trigger();
-    } else {
-      iframe.addEventListener('load', trigger, { once: true });
-    }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [targetLangParam, iframeRef]);
 
   const handleRandomSection = () => {
     if (flattenedToc.length === 0) return;
@@ -747,6 +759,12 @@ export default function Reader({ params, searchParams }) {
     setIframeLoading(false);
     applyIframeTheme(activeLang);
     restoreScrollPosition(currentPage);
+
+    // Auto-translate when arriving from a quote/bookmark link with ?lang=kk/ru
+    // Use a direct call — safe here since handleIframeLoad captures the latest closures
+    if (targetLangParam && targetLangParam !== 'tr' && currentPage && activeLang === 'tr') {
+      setTimeout(() => handleTranslate(targetLangParam), 400);
+    }
     // Highlight search term if we navigated from a search result
     if (pendingHighlightRef.current && iframeRef.current?.contentWindow) {
       const term = pendingHighlightRef.current;
@@ -1191,6 +1209,12 @@ export default function Reader({ params, searchParams }) {
         </div>
 
         <div className="sidebar-footer">
+          <Link href="/videos" style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '9px 14px', borderRadius: '10px', background: 'var(--surface)', boxShadow: 'var(--shadow-neu-sm)', textDecoration: 'none', color: 'var(--text-muted)', fontFamily: 'var(--font-ui)', fontSize: '0.75rem', fontWeight: 700, marginBottom: '8px', transition: 'box-shadow 0.15s' }}
+            onMouseEnter={e => e.currentTarget.style.boxShadow = 'var(--shadow-neu-out)'}
+            onMouseLeave={e => e.currentTarget.style.boxShadow = 'var(--shadow-neu-sm)'}
+          >
+            📹 <span>Video Dersler</span>
+          </Link>
           <Link href="/profile" className="sidebar-profile-link">
             <div className="sidebar-profile-avatar">
               {user ? user.username[0].toUpperCase() : '?'}
@@ -1660,7 +1684,7 @@ export default function Reader({ params, searchParams }) {
       )}
 
       {/* Highlighter Component */}
-      <Highlighter iframeRef={iframeRef} currentPage={currentPage} bookId={book.replace('.chm', '')} activeLang={activeLang} />
+      <Highlighter iframeRef={iframeRef} currentPage={currentPage} bookId={book.replace('.chm', '')} activeLang={activeLang} compareContentRef={compareContentRef} />
 
       <style jsx global>{`
         /* ── Layout ── */

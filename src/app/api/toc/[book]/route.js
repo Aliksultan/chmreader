@@ -29,14 +29,15 @@ function buildTocTree(dirPath, basePath, relativePath = '') {
         if (stat.isDirectory()) {
             items.push({
                 name: cleanName(file),
-                local: '', // Folders don't have a direct page in this setup unless we define one
+                raw: file,  // original filesystem slug for URL building
+                local: '',
                 children: buildTocTree(fullPath, basePath, nextRelativePath)
             });
         } else if (file.toLowerCase().endsWith('.htm') || file.toLowerCase().endsWith('.html')) {
-            // Ignore localization side-car files from populating as main TOC entries
             if (!file.match(/\.(ru|kk)\.html?$/i)) {
                 items.push({
                     name: cleanName(file),
+                    raw: file,
                     local: nextRelativePath,
                     children: []
                 });

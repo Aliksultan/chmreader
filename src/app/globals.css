@@ -347,3 +347,87 @@ body {
 
 .fade-in  { animation: fadeIn 0.2s ease both; }
 .slide-in { animation: slideInLeft 0.2s ease both; }
+
+/* ── Global Modal Overlay (AiStudyHub, search modals, etc.) ── */
+.search-modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.38);
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
+  z-index: 10000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+}
+
+/* ── AI Study Hub Modal ── */
+.ai-hub-modal {
+  background: var(--surface, #F0EDE6);
+  width: 90%;
+  max-width: 900px;
+  height: 85vh;
+  border-radius: 16px;
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 25px 50px -12px rgba(0,0,0,0.25);
+  overflow: hidden;
+  animation: aiHubSlideUp 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+  border: 1px solid var(--surface-border, #DDD9D0);
+}
+.ai-hub-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 20px 24px;
+  border-bottom: 1px solid var(--surface-border, #DDD9D0);
+  background: var(--surface-up, #F6F3EC);
+  flex-shrink: 0;
+}
+.ai-hub-title h2 { margin: 0; font-size: 1.25rem; color: var(--text, #1a1a1a); }
+.ai-hub-subtitle { font-size: 0.85rem; color: var(--text-muted, #666); margin-top: 4px; display: block; }
+.ai-hub-tabs {
+  display: flex;
+  border-bottom: 1px solid var(--surface-border, #DDD9D0);
+  background: var(--surface, #F0EDE6);
+  padding: 0 16px;
+  overflow-x: auto;
+  flex-shrink: 0;
+}
+.ai-tab {
+  padding: 16px 20px;
+  border: none;
+  background: transparent;
+  color: var(--text-muted, #666);
+  font-weight: 500;
+  font-size: 0.95rem;
+  cursor: pointer;
+  white-space: nowrap;
+  border-bottom: 3px solid transparent;
+  transition: all 0.2s ease;
+  font-family: var(--font-ui, sans-serif);
+}
+.ai-tab:hover { color: var(--text, #1a1a1a); }
+.ai-tab.active { color: var(--primary, #006666); border-bottom-color: var(--primary, #006666); }
+.ai-hub-body {
+  flex: 1;
+  overflow-y: auto;
+  background: var(--surface-down, #E8E5DE);
+  position: relative;
+}
+
+@keyframes aiHubSlideUp {
+  from { opacity: 0; transform: translateY(24px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+@media (max-width: 1024px) {
+  .ai-hub-modal {
+    width: 100%;
+    max-width: 100%;
+    height: 100dvh;
+    border-radius: 0;
+    border: none;
+  }
+}

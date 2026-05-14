@@ -12,22 +12,23 @@ const COLORS = [
   { id: 'purple', hex: '#ddd6fe', dark: '#4c1d95', label: 'Purple' },
 ];
 
-export default function Highlighter({ iframeRef, currentPage, bookId, activeLang = 'tr' }) {
+export default function Highlighter({ iframeRef, currentPage, bookId, activeLang = 'tr', compareContentRef }) {
   const { user, addToHighlightsIndex, removeFromHighlightsIndex } = useReader();
 
-  const [highlights, setHighlights]     = useState([]);
-  const [toolbarPos, setToolbarPos]     = useState(null);  // { top, left }
+  const [highlights, setHighlights]       = useState([]);
+  const [toolbarPos, setToolbarPos]       = useState(null);
   const [selectedRange, setSelectedRange] = useState(null);
-  const [activeColor, setActiveColor]   = useState('yellow');
-  const [annotation, setAnnotation]     = useState('');
+  // Text selected in the compare div (translation panel) — no DOM range needed
+  const [selectedCompareText, setSelectedCompareText] = useState('');
+  const [activeColor, setActiveColor]     = useState('yellow');
+  const [annotation, setAnnotation]       = useState('');
   const [showAnnotationBox, setShowAnnotationBox] = useState(false);
-  const [panelOpen, setPanelOpen]       = useState(false);
-  const [pendingHighlight, setPendingHighlight] = useState(null);
+  const [panelOpen, setPanelOpen]         = useState(false);
 
   const isSyncing = useRef(false);
   const toolbarRef = useRef(null);
 
-  // ── 1. Fetch highlights when page changes ──────────────────────────────────
+  // ── 1. Fetch highlights when page changes ─────────────────────────────────
   useEffect(() => {
     setHighlights([]);
     setToolbarPos(null);
@@ -82,7 +83,7 @@ export default function Highlighter({ iframeRef, currentPage, bookId, activeLang
     highlights.forEach(h => applyHighlight(h, doc.body, removeHighlight));
   }, [highlights, iframeRef, syncHighlights]);
 
-  // ── 4. Listen to iframe text selection (re-bind on every load) ───────────
+  // ── 4a. Listen to iframe text selection ───────────────────────────────────
   useEffect(() => {
     const iframeEl = iframeRef.current;
     if (!iframeEl) return;
@@ -103,6 +104,7 @@ export default function Highlighter({ iframeRef, currentPage, bookId, activeLang
         const rRect = range.getBoundingClientRect();
         const iRect = iframeEl.getBoundingClientRect();
 
+        setSelectedCompareText(''); // clear compare selection
         setToolbarPos({
           top:  rRect.top  + iRect.top  - 56,
           left: rRect.left + iRect.left + rRect.width / 2,
@@ -117,21 +119,78 @@ export default function Highlighter({ iframeRef, currentPage, bookId, activeLang
         if (!sel || sel.isCollapsed) setToolbarPos(null);
       };
 
-      // Clean up any old listeners before re-adding
       doc.removeEventListener('mouseup', onMouseUp);
       doc.removeEventListener('selectionchange', onSelectionChange);
       doc.addEventListener('mouseup', onMouseUp);
       doc.addEventListener('selectionchange', onSelectionChange);
     };
 
-    // Bind immediately (if iframe already loaded) and re-bind on every load
     bindListeners();
     iframeEl.addEventListener('load', bindListeners);
     return () => iframeEl.removeEventListener('load', bindListeners);
   }, [iframeRef, currentPage]);
 
+  // ── 4b. Listen to text selection in the compare div (translation panel) ───
+  useEffect(() => {
+    const onMouseUp = (e) => {
+      const compareEl = compareContentRef?.current;
+      if (!compareEl) return;
+
+      const sel = window.getSelection();
+      if (!sel || sel.isCollapsed || !sel.toString().trim()) return;
+
+      // Only act if the selection is inside the compare div
+      const range = sel.getRangeAt(0);
+      if (!compareEl.contains(range.commonAncestorContainer)) return;
+
+      const rRect = range.getBoundingClientRect();
+
+      setSelectedRange(null); // clear iframe selection
+      setSelectedCompareText(sel.toString().trim());
+      setToolbarPos({
+        top:  rRect.top  - 56,
+        left: rRect.left + rRect.width / 2,
+      });
+      setAnnotation('');
+      setShowAnnotationBox(false);
+    };
+
+    document.addEventListener('mouseup', onMouseUp);
+    return () => document.removeEventListener('mouseup', onMouseUp);
+  }, [compareContentRef, currentPage]);
+
   // ── 5. Commit a highlight ─────────────────────────────────────────────────
   const commitHighlight = useCallback((color, note = '') => {
+    // ── 5a. Highlight from the compare/translation div ────────────────────
+    if (selectedCompareText) {
+      const id = `hl_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+      const h = {
+        id,
+        text: selectedCompareText,
+        color,
+        note,
+        pageId: currentPage,
+        timestamp: Date.now(),
+        // No `range` — translation DOM is dynamic, not persisted
+      };
+      const updated = [...highlights, h];
+      setHighlights(updated);
+      if (user) syncHighlights(updated);
+      addToHighlightsIndex({
+        id, book: bookId, bookTitle: bookId,
+        pageId: currentPage, text: h.text,
+        color, note, timestamp: h.timestamp,
+        lang: activeLang,
+      });
+      window.getSelection()?.removeAllRanges();
+      setSelectedCompareText('');
+      setToolbarPos(null);
+      setShowAnnotationBox(false);
+      setAnnotation('');
+      return;
+    }
+
+    // ── 5b. Highlight from the iframe (original text) ─────────────────────
     if (!selectedRange) return;
     const doc = iframeRef.current.contentWindow.document;
     const h = serializeRange(selectedRange, doc.body, currentPage, color);
@@ -139,22 +198,21 @@ export default function Highlighter({ iframeRef, currentPage, bookId, activeLang
     const updated = [...highlights, h];
     setHighlights(updated);
     if (user) syncHighlights(updated);
-    // Add to global profile quotes index
     addToHighlightsIndex({
       id: h.id, book: bookId, bookTitle: bookId,
       pageId: currentPage, text: h.text,
       color, note, timestamp: h.timestamp,
-      lang: activeLang, // save the language so profile can restore it
+      lang: activeLang,
     });
     iframeRef.current.contentWindow.getSelection().removeAllRanges();
     setToolbarPos(null);
     setShowAnnotationBox(false);
     setAnnotation('');
-  }, [selectedRange, user, iframeRef, highlights, currentPage, syncHighlights, addToHighlightsIndex, bookId]);
+  }, [selectedRange, selectedCompareText, user, iframeRef, highlights, currentPage, syncHighlights, addToHighlightsIndex, bookId, activeLang]);
 
   const handleColorClick = (colorId) => {
     setActiveColor(colorId);
-    if (showAnnotationBox) return; // wait for note submit
+    if (showAnnotationBox) return;
     commitHighlight(colorId);
   };
 
@@ -168,7 +226,7 @@ export default function Highlighter({ iframeRef, currentPage, bookId, activeLang
     const updated = highlights.filter(h => h.id !== id);
     setHighlights(updated);
     syncHighlights(updated);
-    removeFromHighlightsIndex(id); // remove from global profile
+    removeFromHighlightsIndex(id);
   };
 
   // ── Render ────────────────────────────────────────────────────────────────
@@ -389,7 +447,7 @@ export default function Highlighter({ iframeRef, currentPage, bookId, activeLang
                         WebkitBoxOrient: 'vertical',
                         overflow: 'hidden',
                       }}>
-                        "{h.text}"
+                        &quot;{h.text}&quot;
                       </p>
                       {h.note && (
                         <p style={{
@@ -426,7 +484,7 @@ export default function Highlighter({ iframeRef, currentPage, bookId, activeLang
         </div>
       )}
 
-      {/* Page highlights badge — always visible when logged in */}
+      {/* Page highlights badge */}
       {user && highlights.length > 0 && !toolbarPos && (
         <button
           onClick={() => setPanelOpen(v => !v)}
