@@ -90,17 +90,58 @@ function wrapTextNode(doc, node, start, end, markClass, highlight, onRemove) {
 
 // Deserialize a highlight object back into a DOM Range and wrap it with <mark>
 export function applyHighlight(highlight, root, onRemove) {
-  const startNode = getElementByXPath(highlight.startContainerPath, root);
-  const endNode   = getElementByXPath(highlight.endContainerPath,   root);
-
-  if (!startNode || !endNode) {
-    console.warn('Could not find nodes for highlight', highlight);
-    return null;
-  }
+  let startNode = highlight.startContainerPath ? getElementByXPath(highlight.startContainerPath, root) : null;
+  let endNode   = highlight.endContainerPath ? getElementByXPath(highlight.endContainerPath, root) : null;
 
   // Use the iframe's own document, NOT the main window's document
   const doc = root.ownerDocument || document;
   const markClass = `highlight-mark hl-${highlight.color}`;
+
+  // Fallback for translation highlights (no XPath or failed XPath)
+  if (!startNode || !endNode) {
+    if (!highlight.text) {
+      console.warn('Could not find nodes and no text fallback for highlight', highlight);
+      return null;
+    }
+    
+    // Find text in the root using TreeWalker
+    const walker = doc.createTreeWalker(root, NodeFilter.SHOW_TEXT, null, false);
+    const targetText = highlight.text.trim();
+    if (!targetText) return null;
+    
+    let currentNode;
+    let matchFound = false;
+    
+    // Simple approach: look for the text in a single node first
+    while ((currentNode = walker.nextNode())) {
+      const idx = currentNode.textContent.indexOf(targetText);
+      if (idx !== -1) {
+        const mark = wrapTextNode(
+          doc, currentNode,
+          idx,
+          idx + targetText.length,
+          markClass, highlight, onRemove
+        );
+        
+        // Scroll into view if this was triggered by a navigation from profile
+        // (We can check if it's the only highlight or rely on the caller, but scrolling here is safe)
+        if (mark) {
+          // Add a subtle scroll (delay to ensure layout)
+          setTimeout(() => {
+            try { mark.scrollIntoView({ behavior: 'smooth', block: 'center' }); } catch(e){}
+          }, 300);
+          return [mark];
+        }
+      }
+    }
+    
+    // Note: Cross-node text search for fallback is complex and omitted for simplicity,
+    // as translation highlights usually come from simple selections.
+    console.warn('Text fallback failed for highlight', highlight);
+    return null;
+  }
+
+
 
   try {
     // ── Fast path: selection is entirely within ONE text node ───────────────

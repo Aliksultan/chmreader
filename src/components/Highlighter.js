@@ -12,7 +12,7 @@ const COLORS = [
   { id: 'purple', hex: '#ddd6fe', dark: '#4c1d95', label: 'Purple' },
 ];
 
-export default function Highlighter({ iframeRef, currentPage, bookId, activeLang = 'tr', compareContentRef }) {
+export default function Highlighter({ iframeRef, currentPage, bookId, activeLang = 'tr', compareContentRef, compareMode }) {
   const { user, addToHighlightsIndex, removeFromHighlightsIndex } = useReader();
 
   const [highlights, setHighlights]       = useState([]);
@@ -63,16 +63,11 @@ export default function Highlighter({ iframeRef, currentPage, bookId, activeLang
     }
   }, [user, bookId, currentPage]);
 
-  // ── 3. Inject <mark> tags into iframe DOM ─────────────────────────────────
+  // ── 3. Inject <mark> tags into iframe DOM and Compare Div ────────────────
   useEffect(() => {
     const doc = iframeRef.current?.contentWindow?.document;
-    if (!doc?.body) return;
-
-    // Clear old marks
-    doc.querySelectorAll('mark[data-highlight-id]').forEach(m => {
-      const p = m.parentNode;
-      if (p) { while (m.firstChild) p.insertBefore(m.firstChild, m); p.removeChild(m); p.normalize(); }
-    });
+    const compareEl = compareContentRef?.current;
+    if (!doc?.body && !compareEl) return;
 
     const removeHighlight = (id) => {
       const updated = highlights.filter(h => h.id !== id);
@@ -80,8 +75,41 @@ export default function Highlighter({ iframeRef, currentPage, bookId, activeLang
       syncHighlights(updated);
     };
 
-    highlights.forEach(h => applyHighlight(h, doc.body, removeHighlight));
-  }, [highlights, iframeRef, syncHighlights]);
+    // Apply to iframe body
+    if (doc?.body) {
+      // Clear old marks
+      doc.querySelectorAll('mark[data-highlight-id]').forEach(m => {
+        const p = m.parentNode;
+        if (p) { while (m.firstChild) p.insertBefore(m.firstChild, m); p.removeChild(m); p.normalize(); }
+      });
+      highlights.forEach(h => {
+        // If we are NOT in compare mode, and activeLang is translated, we apply all highlights to iframe body
+        // If we ARE in compare mode, iframe body is Turkish, so only apply 'tr' highlights (or highlights with no lang)
+        const isTrHighlight = !h.lang || h.lang === 'tr';
+        const isCompareMode = !!compareEl?.innerHTML; // Simple way to know if compare is active
+        
+        if (!isCompareMode || isTrHighlight) {
+          applyHighlight(h, doc.body, removeHighlight);
+        }
+      });
+    }
+
+    // Apply to compare div
+    if (compareEl) {
+      // Clear old marks
+      compareEl.querySelectorAll('mark[data-highlight-id]').forEach(m => {
+        const p = m.parentNode;
+        if (p) { while (m.firstChild) p.insertBefore(m.firstChild, m); p.removeChild(m); p.normalize(); }
+      });
+      highlights.forEach(h => {
+        // Only apply translated highlights to compare div
+        if (h.lang && h.lang === activeLang && activeLang !== 'tr') {
+          applyHighlight(h, compareEl, removeHighlight);
+        }
+      });
+    }
+
+  }, [highlights, iframeRef, syncHighlights, activeLang, compareContentRef, compareMode]);
 
   // ── 4a. Listen to iframe text selection ───────────────────────────────────
   useEffect(() => {

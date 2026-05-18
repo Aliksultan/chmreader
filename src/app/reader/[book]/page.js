@@ -1684,7 +1684,14 @@ export default function Reader({ params, searchParams }) {
       )}
 
       {/* Highlighter Component */}
-      <Highlighter iframeRef={iframeRef} currentPage={currentPage} bookId={book.replace('.chm', '')} activeLang={activeLang} compareContentRef={compareContentRef} />
+      <Highlighter 
+        iframeRef={iframeRef} 
+        currentPage={currentPage} 
+        bookId={book.replace('.chm', '')} 
+        activeLang={activeLang} 
+        compareContentRef={compareContentRef}
+        compareMode={compareMode}
+      />
 
       <style jsx global>{`
         /* ── Layout ── */
