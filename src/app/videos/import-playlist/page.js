@@ -24,6 +24,7 @@ export default function ImportPlaylistPage() {
   const [playlistSlug, setPlaylistSlug] = useState('');
   const [playlistTitle, setPlaylistTitle] = useState('');
   const [language, setLanguage] = useState('tr');
+  const [concurrency, setConcurrency] = useState(3); // parallel workers
 
   // Step 2: Analysis + Selection
   const [analysis, setAnalysis] = useState(null);
@@ -116,11 +117,13 @@ export default function ImportPlaylistPage() {
     });
     setVideoStatuses(initStatuses);
 
-    for (const video of analysis.videos) {
-      if (!selectedIds.has(video.videoId)) continue; // skip unselected
+    // Build queue of selected videos (in playlist order)
+    const queue = analysis.videos.filter(v => selectedIds.has(v.videoId));
+    let queueIndex = 0; // shared pointer — workers pull from this
 
+    // Process a single video and update its status
+    const processVideo = async (video) => {
       setVideoStatuses(prev => ({ ...prev, [video.videoId]: { status: STATUS.PROCESSING } }));
-
       try {
         const res = await fetch('/api/videos/import-playlist', {
           method: 'POST',
@@ -137,7 +140,6 @@ export default function ImportPlaylistPage() {
           }),
         });
         const data = await res.json();
-
         if (res.ok && data.success) {
           setVideoStatuses(prev => ({ ...prev, [video.videoId]: { status: STATUS.DONE, episodeId: data.episodeId } }));
         } else {
@@ -146,7 +148,19 @@ export default function ImportPlaylistPage() {
       } catch (err) {
         setVideoStatuses(prev => ({ ...prev, [video.videoId]: { status: STATUS.ERROR, error: err.message } }));
       }
-    }
+    };
+
+    // Worker: keeps pulling from the shared queue until empty
+    const worker = async () => {
+      while (true) {
+        const idx = queueIndex++; // atomically grab next index
+        if (idx >= queue.length) break;
+        await processVideo(queue[idx]);
+      }
+    };
+
+    // Launch `concurrency` workers in parallel
+    await Promise.all(Array.from({ length: Math.min(concurrency, queue.length) }, worker));
 
     setIsRunning(false);
   };
@@ -204,6 +218,15 @@ export default function ImportPlaylistPage() {
                   <option value="ru">🇷🇺 Russian</option>
                   <option value="kk">🇰🇿 Kazakh</option>
                   <option value="en">🇬🇧 English</option>
+                </select>
+              </Field>
+              <Field label="Parallel Workers" hint="2–3 recommended" style={{ flex: 1 }}>
+                <select value={concurrency} onChange={e => setConcurrency(Number(e.target.value))} disabled={isRunning}>
+                  <option value={1}>1 (sequential)</option>
+                  <option value={2}>2 workers</option>
+                  <option value={3}>3 workers ★</option>
+                  <option value={4}>4 workers</option>
+                  <option value={5}>5 workers</option>
                 </select>
               </Field>
             </div>
@@ -402,10 +425,11 @@ export default function ImportPlaylistPage() {
               }} />
             </div>
 
-            <div style={{ display: 'flex', gap: '20px', marginBottom: '16px', fontSize: '0.82rem', color: 'var(--text-muted)' }}>
+            <div style={{ display: 'flex', gap: '20px', marginBottom: '16px', fontSize: '0.82rem', color: 'var(--text-muted)', flexWrap: 'wrap' }}>
               <span>✅ Done: <strong style={{ color: '#10b981' }}>{totalDone}</strong></span>
               <span>❌ Errors: <strong style={{ color: '#ef4444' }}>{totalErrors}</strong></span>
               <span>⏳ Remaining: <strong>{Math.max(0, totalSelected - totalProcessed)}</strong></span>
+              {isRunning && <span>⚡ Workers: <strong style={{ color: 'var(--primary)' }}>{concurrency}</strong> parallel</span>}
             </div>
 
             {/* ── Error details (shown directly here, not just in video list) ── */}

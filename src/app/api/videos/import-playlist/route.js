@@ -131,99 +131,113 @@ export async function POST(request) {
   }
 
   const WHISPER_LIMIT = 24.5 * 1024 * 1024; // 24.5 MB
+  const SEGMENT_DURATION = 20 * 60;          // 20-min segments when splitting
 
   // ── Step 1: Check ffmpeg availability ─────────────────────────────────────
-  // ffmpeg enables: re-encode to 64kbps mp3 → ~15 MB/32min (always under 25 MB).
-  // Without ffmpeg: download raw audio and hope it fits; if not, give a clear error.
   let hasFfmpeg = false;
   try {
     require('child_process').execSync('ffmpeg -version', { stdio: 'ignore', timeout: 3000 });
     hasFfmpeg = true;
   } catch {}
 
-  // ── Step 2: Download audio via yt-dlp ─────────────────────────────────────
-  const os = require('os');
+  // ── Step 2: Download + compress audio via yt-dlp ──────────────────────────
+  const os   = require('os');
   const path = require('path');
-  const fs = require('fs');
+  const fs   = require('fs');
+  const { execSync } = require('child_process');
   const tmpBase = path.join(os.tmpdir(), `yt_${videoId}_${Date.now()}`);
-
-  let audioBuffer;
-  let audioMime = 'audio/mpeg';
-  let audioExt  = 'mp3';
+  const tmpMp3  = `${tmpBase}.mp3`;
 
   try {
     const youtubeDlExec = (await import('youtube-dl-exec')).default;
 
     if (hasFfmpeg) {
-      // ── With ffmpeg: transcode to 64kbps mp3 ──────────────────────────────
-      // 64kbps × 32 min ≈ 15 MB — well under Whisper's 25 MB limit for any
-      // reasonable video length (up to ~50 min). Speech quality is fine.
-      const outFile = `${tmpBase}.mp3`;
+      // Transcode to 32 kbps MP3 via ffmpeg.
+      // 32 kbps × 60 min ≈ 14 MB, × 80 min ≈ 18 MB  → fits under 25 MB.
+      // Speech intelligibility is excellent even at 32 kbps.
       await youtubeDlExec(`https://www.youtube.com/watch?v=${videoId}`, {
         output: `${tmpBase}.%(ext)s`,
         extractAudio: true,
         audioFormat: 'mp3',
-        audioQuality: '5',   // ~64 kbps VBR
+        audioQuality: '9',                           // LAME VBR q9 ≈ 32 kbps
+        postprocessorArgs: ['ffmpeg:-b:a 32k'],      // hard cap at 32 kbps CBR
         noPlaylist: true,
         quiet: true,
       });
-
-      if (!fs.existsSync(outFile)) throw new Error('mp3 output file not found after ffmpeg conversion');
-      audioBuffer = fs.readFileSync(outFile);
-      audioMime = 'audio/mpeg';
-      audioExt  = 'mp3';
-      try { fs.unlinkSync(outFile); } catch {}
-
+      if (!fs.existsSync(tmpMp3)) throw new Error('mp3 output not found after ffmpeg conversion');
     } else {
-      // ── Without ffmpeg: download raw audio in its native format ───────────
+      // No ffmpeg — download raw audio and check size
       await youtubeDlExec(`https://www.youtube.com/watch?v=${videoId}`, {
         output: `${tmpBase}.%(ext)s`,
         format: 'bestaudio',
         noPlaylist: true,
         quiet: true,
       });
-
-      // Detect the actual downloaded file
-      const found = ['m4a', 'webm', 'ogg', 'mp4', 'opus'].find(
-        ext => fs.existsSync(`${tmpBase}.${ext}`)
-      );
+      const found = ['m4a', 'webm', 'ogg', 'mp4', 'opus'].find(e => fs.existsSync(`${tmpBase}.${e}`));
       if (!found) throw new Error('Downloaded audio file not found');
-
-      const outFile = `${tmpBase}.${found}`;
-      const { size } = fs.statSync(outFile);
-
+      const rawFile = `${tmpBase}.${found}`;
+      const { size } = fs.statSync(rawFile);
       if (size > WHISPER_LIMIT) {
-        fs.unlinkSync(outFile);
+        fs.unlinkSync(rawFile);
         const mb = (size / 1024 / 1024).toFixed(1);
         return NextResponse.json({
-          error: `Audio too large (${mb} MB > 25 MB). Install ffmpeg to enable automatic compression. ` +
-                 `Run: winget install Gyan.FFmpeg  — then restart the dev server.`,
+          error: `Audio too large (${mb} MB > 25 MB). Install ffmpeg for automatic compression: winget install Gyan.FFmpeg`,
         }, { status: 413 });
       }
-
-      audioBuffer = fs.readFileSync(outFile);
-      audioMime = found === 'm4a' ? 'audio/mp4' : found === 'ogg' ? 'audio/ogg' : `audio/${found}`;
-      audioExt  = found;
-      try { fs.unlinkSync(outFile); } catch {}
+      // Rename to .mp3 path so the rest of the code is uniform
+      fs.renameSync(rawFile, tmpMp3);
     }
   } catch (e) {
-    // Clean up any temp files
-    try {
-      ['mp3','m4a','webm','ogg','mp4','opus'].forEach(ext => {
-        const f = `${tmpBase}.${ext}`;
-        if (fs.existsSync(f)) fs.unlinkSync(f);
-      });
-    } catch {}
+    try { ['mp3','m4a','webm','ogg','mp4','opus'].forEach(ext => { try { fs.unlinkSync(`${tmpBase}.${ext}`); } catch {} }); } catch {}
     return NextResponse.json({ error: `Audio download failed: ${e.message}` }, { status: 500 });
   }
 
-  // ── Step 3: Transcribe with Whisper ───────────────────────────────────────
+  // ── Step 3: Transcribe (with ffmpeg time-segment split if > 24.5 MB) ───────
   let srtContent;
   try {
-    srtContent = await whisperTranscribe(audioBuffer, videoId, audioMime, audioExt, openaiApiKey, language);
+    const { size: mp3Size } = fs.statSync(tmpMp3);
+
+    if (mp3Size <= WHISPER_LIMIT) {
+      // ── Single file — send directly ────────────────────────────────────────
+      const buf = fs.readFileSync(tmpMp3);
+      try { fs.unlinkSync(tmpMp3); } catch {}
+      srtContent = await whisperTranscribe(buf, videoId, 'audio/mpeg', 'mp3', openaiApiKey, language);
+
+    } else {
+      // ── File too large even at 32 kbps (video > ~100 min): split with ffmpeg
+      // ffmpeg splits at exact time boundaries → each segment is a valid mp3.
+      // We know segment 0 starts at 0s, segment 1 at 20min, segment 2 at 40min, etc.
+      const segBase = `${tmpBase}_seg`;
+      execSync(
+        `ffmpeg -i "${tmpMp3}" -f segment -segment_time ${SEGMENT_DURATION} -c copy "${segBase}_%03d.mp3" -y`,
+        { stdio: 'ignore' }
+      );
+      try { fs.unlinkSync(tmpMp3); } catch {}
+
+      // Collect segment files in order
+      const segFiles = fs.readdirSync(os.tmpdir())
+        .filter(f => f.startsWith(path.basename(segBase)) && f.endsWith('.mp3'))
+        .sort()
+        .map(f => path.join(os.tmpdir(), f));
+
+      if (segFiles.length === 0) throw new Error('ffmpeg produced no segment files');
+
+      const srtParts = [];
+      for (let i = 0; i < segFiles.length; i++) {
+        const buf = fs.readFileSync(segFiles[i]);
+        try { fs.unlinkSync(segFiles[i]); } catch {}
+        const offsetSec = i * SEGMENT_DURATION; // exact: segment i starts at i×20min
+        const chunkSrt  = await whisperTranscribe(buf, `${videoId}_seg${i}`, 'audio/mpeg', 'mp3', openaiApiKey, language);
+        srtParts.push({ srt: chunkSrt, offsetSec });
+      }
+
+      srtContent = mergeSrtChunks(srtParts);
+    }
   } catch (e) {
+    try { fs.unlinkSync(tmpMp3); } catch {}
     return NextResponse.json({ error: `Transcription failed: ${e.message}` }, { status: 500 });
   }
+
 
   // ── Step 4: Save to disk ───────────────────────────────────────────────────
   try {
