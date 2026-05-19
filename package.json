@@ -11,6 +11,7 @@
   "dependencies": {
     "@ai-sdk/google": "^3.0.53",
     "@ai-sdk/react": "^3.0.139",
+    "@distube/ytdl-core": "^4.16.12",
     "@upstash/redis": "^1.36.3",
     "@vercel/analytics": "^2.0.1",
     "ai": "^6.0.137",
@@ -22,6 +23,7 @@
     "react-markdown": "^10.1.0",
     "remark-gfm": "^4.0.1",
     "sanitize-html": "^2.17.2",
+    "youtube-dl-exec": "^3.1.7",
     "zod": "^4.3.6"
   },
   "devDependencies": {

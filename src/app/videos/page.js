@@ -17,6 +17,7 @@ export default function VideosPage() {
         <span style={{ color: 'var(--text-faint)' }}>/</span>
         <span style={{ color: 'var(--text)', fontWeight: 600 }}>📹 Videos</span>
         <div style={{ flex: 1 }} />
+        <Link href="/videos/import-playlist" style={{ padding: '6px 12px', background: 'var(--surface)', boxShadow: 'var(--shadow-neu-sm)', color: 'var(--primary)', borderRadius: '8px', textDecoration: 'none', fontSize: '0.8rem', fontWeight: 700, border: '1px solid var(--primary)', display: 'flex', alignItems: 'center', gap: '5px' }}>📥 Import Playlist</Link>
         <Link href="/videos/add" style={{ padding: '6px 12px', background: 'var(--primary)', color: '#fff', borderRadius: '8px', textDecoration: 'none', fontSize: '0.8rem', fontWeight: 700 }}>+ Add Video</Link>
         <Link href="/" style={{ fontSize: '0.8rem', color: 'var(--text-muted)', textDecoration: 'none' }}>← Library</Link>
       </nav>

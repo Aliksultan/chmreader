@@ -3,7 +3,7 @@ const nextConfig = {
   compress: true,
   images: { unoptimized: true },
   poweredByHeader: false,
-  serverExternalPackages: ['pdf2json', 'pdf-parse'],
+  serverExternalPackages: ['pdf2json', 'pdf-parse', '@distube/ytdl-core', 'youtube-dl-exec'],
   webpack: (config) => {
     config.resolve.alias.canvas = false;
     return config;
